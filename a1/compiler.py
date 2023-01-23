@@ -15,8 +15,23 @@ def select_instructions(program: Program) -> x86.X86Program:
     :param program: a Lmin program
     :return: a pseudo-x86 program
     """
-
-    # YOUR CODE HERE
+    match program:
+        case Program([Print(Constant(val))]):
+            return x86.X86Program(
+                {
+                    'main':
+                        [
+                            x86.NamedInstr(
+                                "movq",
+                                [
+                                    x86.Immediate(val),
+                                    x86.Reg("rdi")
+                                ]),
+                            x86.Callq("print_int"),
+                            x86.Retq()
+                        ]
+                },
+                None)
     pass
 
 
