@@ -12,6 +12,18 @@ Please [click
 here](https://github.com/jnear/cs211-data-privacy/blob/master/jupyter.md)
 for information on installing Conda and setting up Jupyter notebooks.
 
+## Installing Python with Homebrew
+
+Homebrew is an open source package manager for MacOS. To install homebrew run their installation command on your terminal. You can find 
+the command on their [website](https://brew.sh/)
+
+Once you have homebrew to installed, you can install any version of python using their CLI. In this case I am installing version 3.10 other 
+versions are also supported, you can find more information in the [python formulae](https://docs.brew.sh/Homebrew-and-Python)
+
+```bash
+brew install python@3.10
+```
+
 ## Creating the CS202 Environment
 
 Python version 3.10 is required for CS202 (to support pattern
@@ -29,12 +41,9 @@ libraries. You can create the environment as follows:
 
 You can install the support code for CS202 using `pip`:
 
-1. Clone this repository to your local computer
-2. Open a terminal with Conda support (as above)
-3. Activate the Conda env: `conda activate cs202`
-4. Install the code: `pip install .` (note that the dot is important:
-   and it tells `pip` to install the code found in the current
-   directory)
+1. Open a terminal with Conda support (as above)
+2. Activate the Conda env: `conda activate cs202`
+3. Install the code: `pip install git+https://github.com/jnear/cs202-assignments.git`
 
 ## Installing and Using PyCharm
 
@@ -49,7 +58,7 @@ You can set up PyCharm to work with your Conda environment as follows:
 1. Click the "open" button in PyCharm to open a project
 2. Select the directory where you checked out this repo (if you're
    asked to create a virtual env, click "cancel")
-3. Open Settings (File -> Settings)
+3. Open Settings (File -> Settings, or PyCharm -> Preferences on MacOS)
 4. Open the "Project: cs202-assignments" -> "Python Interpreter"
    section of the settings
 5. Click the settings gear icon next to the "Python Interpreter"
