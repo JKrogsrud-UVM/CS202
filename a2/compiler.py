@@ -122,12 +122,25 @@ def select_instructions(prog: Program) -> x86.X86Program:
     :return: a pseudo-x86 program
     """
 
-    match prog:
-        case Program(stmts):
-            for stmt in stmts:
+    def si_atm(atm: Expr) -> x86.Arg
+        match stmt:
+            case:
+                Assign(x, Prim('add', [atm1, atm2]))
+                    pass
+            case:
+                Assign(x, atm1):
+                    pass
 
+    def si_stmt(stmt: Stmt) -> List[x86.Instr]
+        pass
 
-    pass
+    def si_stmts(stmts: List[Stmt]) ->List[x86.Instr]:
+        instrs = []
+        for stmt in stmts:
+            i = si_stmt(stmt)
+            instrs.extend(i)
+        return instrs
+        pass
 
 
 ##################################################
