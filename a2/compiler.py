@@ -13,6 +13,12 @@ import cs202_support.x86 as x86
 
 gensym_num = 0
 
+"""
+Notes: Removes complex operands basically removes nested expressions
+select_instructions: This pass trabslates the python to x86 (sort of, it will have variables)
+assign_homes: removes variables
+"""
+
 def gensym(x):
     """
     Constructs a new variable name guaranteed to be unique.
@@ -28,6 +34,25 @@ def gensym(x):
 ##################################################
 # remove-complex-opera*
 ##################################################
+"""
+In words: (See notebook)
+
+Our structure will follow the stucture of the grammar:
+
+- rco_exp compiles an expression
+- rco_stmt compiles a statement
+- rco_stmts compiles a list of statements
+
+rco_stmt compiles a statement
+    - Assign(x,e): call rco_exp on e
+    - Print(e): call rco_exp on e
+    - Challenge: what about bindings?
+- rco_stmts compiles a list of statements
+    - For each stmt
+        - call rco stmt on each stmt
+        - turn the bindings that were created into assignment statements
+
+"""
 
 def rco(prog: Program) -> Program:
     """
@@ -37,7 +62,47 @@ def rco(prog: Program) -> Program:
     :return: An Lvar program with atomic operator arguments.
     """
 
-    pass
+    # This should always return an atomic expression
+    def rco_exp(e: Expr, bindings: Dict[str, Expr]) -> Expr:
+        match e:
+
+            case Constant(n):
+                return Constant(n)
+
+            case Var(x):
+                return Var(x)
+
+            case Prim(op, args):
+
+                # new_args = [rco_exp(a) for a in args]
+                new_args = []
+                for a in args:
+                    new_args.append(rco_exp(a, bindings))
+                    # recursive call to rco_exp should make the argument atomic
+                tmp = gensym('tmp')
+                # bind tmp to prim(op, new_args)
+                bindings[tmp] = Prim(op, new_args)
+                return Var(tmp)
+
+    def rco_stmt(s: Stmt, bindings: Dict[str, Expr]) -> Stmt:
+        match s:
+            case Assign(x, e):
+                return Assign(x, rco_exp(e, bindings))
+            case Print(e):
+                return Print(rco_exp(e, bindings))
+
+    def rco_stmts(stmts: List[Stmt]) -> List[Stmt]:
+        new_stmts = []
+        for stmt in stmts:
+            bindings = {}
+            new_stmt = rco_stmt(stmt, bindings)
+            for b in bindings:
+                print(b, bindings[b])
+                new_stmts.append(Assign(b, bindings[b]))
+            new_stmts.append(new_stmt)
+        return new_stmts
+
+    return Program(rco_stmts(prog.stmts))
 
 
 ##################################################
@@ -56,6 +121,11 @@ def select_instructions(prog: Program) -> x86.X86Program:
     :param prog: a Lvar program
     :return: a pseudo-x86 program
     """
+
+    match prog:
+        case Program(stmts):
+            for stmt in stmts:
+
 
     pass
 

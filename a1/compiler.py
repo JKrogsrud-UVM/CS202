@@ -32,6 +32,8 @@ def select_instructions(program: Program) -> x86.X86Program:
                         ]
                 },
                 None)
+        case _:
+            raise Exception('selection_instructions', program)  # This match will catch anything else and helpful form debug
     pass
 
 
