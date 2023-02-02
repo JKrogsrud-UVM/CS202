@@ -122,17 +122,29 @@ def select_instructions(prog: Program) -> x86.X86Program:
     :return: a pseudo-x86 program
     """
 
-    def si_atm(atm: Expr) -> x86.Arg
-        match stmt:
-            case:
-                Assign(x, Prim('add', [atm1, atm2]))
-                    pass
-            case:
-                Assign(x, atm1):
-                    pass
+    def si_atm(atm: Expr) -> x86.Arg:
+        match atm:
+            case Var(x):
+                return x86.Var(x)
+            case Constant(n):
+                return x86.Immediate(n)
 
-    def si_stmt(stmt: Stmt) -> List[x86.Instr]
-        pass
+    def si_stmt(stmt: Stmt) -> List[x86.Instr]:
+
+        match stmt:
+            case Assign(x, Prim('add', [atm1, atm2])):
+                x86atm1 = si_atm(atm1)
+                x86atm2 = si_atm(atm2)
+                return [x86.NamedInstr("movq", [x86atm1, x86.Reg("rax")]),
+                        x86.NamedInstr("addq", [x86atm2, x86.Reg("rax")]),
+                        x86.NamedInstr("movq", [x86.Reg("rax"), x86.Var(x)])]
+            case Assign(x, atm1):
+                x86atm1 = si_atm(atm1)
+                return [x86.NamedInstr("movq", [x86atm1, x86.Var(x)])]
+            case Print(atm):
+                x86atm = si_atm(atm)
+                return [x86.NamedInstr("movq", [x86atm, x86.Reg("rdi")]),
+                        x86.Callq("print_int")]
 
     def si_stmts(stmts: List[Stmt]) ->List[x86.Instr]:
         instrs = []
@@ -140,7 +152,8 @@ def select_instructions(prog: Program) -> x86.X86Program:
             i = si_stmt(stmt)
             instrs.extend(i)
         return instrs
-        pass
+
+    return x86.X86Program({'main': si_stmts(prog.stmts)})
 
 
 ##################################################
@@ -155,7 +168,36 @@ def assign_homes(program: x86.X86Program) -> x86.X86Program:
     :return: An x86 program, annotated with the amount of stack space used
     """
 
-    pass
+    homes = {}
+    def ah_args(a: x86.Arg):
+        match a:
+            case x86.Reg(r):
+                return x86.Reg(r)
+            case x86.Immediate(i):
+                return x86.Immediate(i)
+            case x86.Var(v):
+                if v in homes:
+                    return x86.Reg(homes[v])
+                else:
+                    offset = -8*(len(homes)+1)
+                    homes[v] = x86.Deref("rbp", offset)
+                return homes[v]
+
+
+    def ah_instr(instr: x86.Instr):
+        match instr:
+            case x86.NamedInstr(op, args):
+                return x86.NamedInstr(op, [ah_args(a) for a in args])
+            case r:
+                return r
+
+    def ah_block(instr: List[x86.Instr]) -> List[x86.Instr]:
+        return [ah_instr(i) for i in instr]
+
+
+    for block in program:
+        program[prog] = ah_block(prog)
+    return x86.X86Program({})
 
 
 ##################################################
