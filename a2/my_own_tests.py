@@ -1,1 +1,1 @@
-print(38 + 4)
+print(x + 7)

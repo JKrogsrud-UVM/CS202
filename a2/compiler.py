@@ -168,20 +168,27 @@ def assign_homes(program: x86.X86Program) -> x86.X86Program:
     :return: An x86 program, annotated with the amount of stack space used
     """
 
-    homes = {}
+    # Output language: pseudo-x86
+    # ATM ::= Immediate(n) | Var(x) | Reg(str)
+    # instr_name ::= "movq" | "addq"
+    # Instr ::= NamedInstr(instr_name, [Atm]) | Callq(str) | Retq()
+    # X86 ::= X86Program(Dict[str, [Instr]])
+
+    homes: Dict[str, x86.Deref] = {}
+
     def ah_args(a: x86.Arg):
         match a:
             case x86.Reg(r):
                 return x86.Reg(r)
             case x86.Immediate(i):
                 return x86.Immediate(i)
-            case x86.Var(v):
-                if v in homes:
-                    return x86.Reg(homes[v])
+            case x86.Var(x):
+                if x in homes:
+                    return homes[x]
                 else:
                     offset = -8*(len(homes)+1)
-                    homes[v] = x86.Deref("rbp", offset)
-                return homes[v]
+                    homes[x] = x86.Deref("rbp", offset)
+                return homes[x]
 
 
     def ah_instr(instr: x86.Instr):
@@ -194,10 +201,22 @@ def assign_homes(program: x86.X86Program) -> x86.X86Program:
     def ah_block(instr: List[x86.Instr]) -> List[x86.Instr]:
         return [ah_instr(i) for i in instr]
 
+    blocks = program.blocks
+    new_blocks = {}
 
-    for block in program:
-        program[prog] = ah_block(prog)
-    return x86.X86Program({})
+    # Determine stack_space
+    def align(num_bytes: int) -> int:
+        if num_bytes % 16 == 0:
+            return num_bytes
+        else:
+            return num_bytes + 8
+
+    for label, instrs in blocks.items():
+        new_blocks[label] = ah_block(instrs)
+
+    stack_space = align(8 * len(homes))
+
+    return x86.X86Program(new_blocks, stack_space=stack_space)
 
 
 ##################################################
@@ -211,7 +230,32 @@ def patch_instructions(program: x86.X86Program) -> x86.X86Program:
     :return: A patched x86 program.
     """
 
-    pass
+    def pi_instr(i: x86.Instr) -> List[x86.Instr]:
+        new_instrs = []
+        match i:
+            case x86.NamedInstr('movq', [x86.Deref(r1, o1), x86.Deref(r2, o2)]):
+                new_instrs.append(x86.NamedInstr('movq', [x86.Deref(r1, o1), x86.Reg('rax')]))
+                new_instrs.append(x86.NamedInstr('movq', [x86.Reg('rax'), x86.Deref(r2, o2)]))
+            case x86.NamedInstr('addq', [x86.Deref(r1, o1), x86.Deref(r2, o2)]):
+                new_instrs.append(x86.NamedInstr('movq', [x86.Deref(r1, o1), x86.Reg('rax')]))
+                new_instrs.append(x86.NamedInstr('addq', [x86.Reg('rax'), x86.Deref(r2, o2)]))
+            case _r:
+                new_instrs.append(_r)
+        return new_instrs
+
+    def pi_block(instrs: List[x86.Instr]) -> List[x86.Instr]:
+        new_instrs = []
+        for i in instrs:
+            new_instrs.extend(pi_instr(i))
+        return new_instrs
+
+    blocks = program.blocks
+    new_blocks = {}
+
+    for item in blocks:
+        new_blocks[item] = pi_block(program.blocks[item])
+
+    return x86.X86Program(new_blocks, stack_space=program.stack_space)
 
 
 ##################################################
@@ -225,7 +269,23 @@ def prelude_and_conclusion(program: x86.X86Program) -> x86.X86Program:
     :return: An x86 program, with prelude and conclusion.
     """
 
-    pass
+    def pc_block(instrs: List[x86.Instr]) -> List[x86.Instr]:
+        new_instr = []
+        new_instr.extend([x86.NamedInstr('pushq', [x86.Reg("rbp")]),
+                         x86.NamedInstr('movq', [x86.Reg("rsp"), x86.Reg("rbp")]),
+                         x86.NamedInstr('subq', [x86.Immediate(program.stack_space), x86.Reg("rsp")])])
+        new_instr.extend(instrs)
+        new_instr.extend([x86.NamedInstr('addq', [x86.Immediate(program.stack_space), x86.Reg("rsp")]),
+                          x86.NamedInstr('popq', [x86.Reg('rbp')]),
+                          x86.Retq()])
+        return new_instr
+
+    blocks = program.blocks
+    new_blocks = {}
+    for item in blocks:
+        new_blocks[item] = pc_block(program.blocks[item])
+
+    return x86.X86Program(new_blocks, stack_space=program.stack_space)
 
 
 ##################################################
