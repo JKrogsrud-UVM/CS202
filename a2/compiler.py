@@ -65,15 +65,11 @@ def rco(prog: Program) -> Program:
     # This should always return an atomic expression
     def rco_exp(e: Expr, bindings: Dict[str, Expr]) -> Expr:
         match e:
-
             case Constant(n):
                 return Constant(n)
-
             case Var(x):
                 return Var(x)
-
             case Prim(op, args):
-
                 # new_args = [rco_exp(a) for a in args]
                 new_args = []
                 for a in args:
@@ -90,6 +86,7 @@ def rco(prog: Program) -> Program:
                 return Assign(x, rco_exp(e, bindings))
             case Print(e):
                 return Print(rco_exp(e, bindings))
+            
 
     def rco_stmts(stmts: List[Stmt]) -> List[Stmt]:
         new_stmts = []
@@ -97,7 +94,7 @@ def rco(prog: Program) -> Program:
             bindings = {}
             new_stmt = rco_stmt(stmt, bindings)
             for b in bindings:
-                print(b, bindings[b])
+                # print(b, bindings[b])
                 new_stmts.append(Assign(b, bindings[b]))
             new_stmts.append(new_stmt)
         return new_stmts
@@ -128,6 +125,10 @@ def select_instructions(prog: Program) -> x86.X86Program:
                 return x86.Var(x)
             case Constant(n):
                 return x86.Immediate(n)
+            # INSTRUCTOR SOLUTION
+            #case _:
+            # Exception
+
 
     def si_stmt(stmt: Stmt) -> List[x86.Instr]:
 
@@ -146,7 +147,7 @@ def select_instructions(prog: Program) -> x86.X86Program:
                 return [x86.NamedInstr("movq", [x86atm, x86.Reg("rdi")]),
                         x86.Callq("print_int")]
 
-    def si_stmts(stmts: List[Stmt]) ->List[x86.Instr]:
+    def si_stmts(stmts: List[Stmt]) -> List[x86.Instr]:
         instrs = []
         for stmt in stmts:
             i = si_stmt(stmt)
@@ -190,7 +191,7 @@ def assign_homes(program: x86.X86Program) -> x86.X86Program:
                     homes[x] = x86.Deref("rbp", offset)
                 return homes[x]
 
-
+    # Might use isinstance in instructor so that we can use exception handling
     def ah_instr(instr: x86.Instr):
         match instr:
             case x86.NamedInstr(op, args):
@@ -205,6 +206,7 @@ def assign_homes(program: x86.X86Program) -> x86.X86Program:
     new_blocks = {}
 
     # Determine stack_space
+    # THIS WILL LIKELY CHANGE IN FUTURE COMPILERS
     def align(num_bytes: int) -> int:
         if num_bytes % 16 == 0:
             return num_bytes
@@ -239,6 +241,7 @@ def patch_instructions(program: x86.X86Program) -> x86.X86Program:
             case x86.NamedInstr('addq', [x86.Deref(r1, o1), x86.Deref(r2, o2)]):
                 new_instrs.append(x86.NamedInstr('movq', [x86.Deref(r1, o1), x86.Reg('rax')]))
                 new_instrs.append(x86.NamedInstr('addq', [x86.Reg('rax'), x86.Deref(r2, o2)]))
+            # Add exception here
             case _r:
                 new_instrs.append(_r)
         return new_instrs

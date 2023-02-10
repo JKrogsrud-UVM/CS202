@@ -40,6 +40,7 @@ def gensym(x):
 # remove-complex-opera*
 ##################################################
 
+# Same as compiler 2
 def rco(prog: Program) -> Program:
     """
     Removes complex operands. After this pass, the arguments to operators (unary and binary
@@ -48,9 +49,45 @@ def rco(prog: Program) -> Program:
     :return: An Lvar program with atomic operator arguments.
     """
 
-    pass
+    # This should always return an atomic expression
+    def rco_exp(e: Expr, bindings: Dict[str, Expr]) -> Expr:
+        match e:
+            case Constant(n):
+                return Constant(n)
+            case Var(x):
+                return Var(x)
+            case Prim(op, args):
+                # new_args = [rco_exp(a) for a in args]
+                new_args = []
+                for a in args:
+                    new_args.append(rco_exp(a, bindings))
+                    # recursive call to rco_exp should make the argument atomic
+                tmp = gensym('tmp')
+                # bind tmp to prim(op, new_args)
+                bindings[tmp] = Prim(op, new_args)
+                return Var(tmp)
 
+    def rco_stmt(s: Stmt, bindings: Dict[str, Expr]) -> Stmt:
+        match s:
+            case Assign(x, e):
+                return Assign(x, rco_exp(e, bindings))
+            case Print(e):
+                return Print(rco_exp(e, bindings))
 
+    def rco_stmts(stmts: List[Stmt]) -> List[Stmt]:
+        new_stmts = []
+        for stmt in stmts:
+            bindings = {}
+            new_stmt = rco_stmt(stmt, bindings)
+            for b in bindings:
+                # print(b, bindings[b])
+                new_stmts.append(Assign(b, bindings[b]))
+            new_stmts.append(new_stmt)
+        return new_stmts
+
+    return Program(rco_stmts(prog.stmts))
+
+# Same as compiler 2
 ##################################################
 # select-instructions
 ##################################################
@@ -61,6 +98,7 @@ def rco(prog: Program) -> Program:
 # Instr ::= NamedInstr(instr_name, [Arg]) | Callq(str) | Retq()
 # X86 ::= X86Program(Dict[str, [Instr]])
 
+# Same as compiler 2
 def select_instructions(prog: Program) -> x86.X86Program:
     """
     Transforms a Lvar program into a pseudo-x86 assembly program.
@@ -68,7 +106,41 @@ def select_instructions(prog: Program) -> x86.X86Program:
     :return: a pseudo-x86 program
     """
 
-    pass
+    def si_atm(atm: Expr) -> x86.Arg:
+        match atm:
+            case Var(x):
+                return x86.Var(x)
+            case Constant(n):
+                return x86.Immediate(n)
+            # INSTRUCTOR SOLUTION
+            # case _:
+            # Exception
+
+    def si_stmt(stmt: Stmt) -> List[x86.Instr]:
+
+        match stmt:
+            case Assign(x, Prim('add', [atm1, atm2])):
+                x86atm1 = si_atm(atm1)
+                x86atm2 = si_atm(atm2)
+                return [x86.NamedInstr("movq", [x86atm1, x86.Reg("rax")]),
+                        x86.NamedInstr("addq", [x86atm2, x86.Reg("rax")]),
+                        x86.NamedInstr("movq", [x86.Reg("rax"), x86.Var(x)])]
+            case Assign(x, atm1):
+                x86atm1 = si_atm(atm1)
+                return [x86.NamedInstr("movq", [x86atm1, x86.Var(x)])]
+            case Print(atm):
+                x86atm = si_atm(atm)
+                return [x86.NamedInstr("movq", [x86atm, x86.Reg("rdi")]),
+                        x86.Callq("print_int")]
+
+    def si_stmts(stmts: List[Stmt]) -> List[x86.Instr]:
+        instrs = []
+        for stmt in stmts:
+            i = si_stmt(stmt)
+            instrs.extend(i)
+        return instrs
+
+    return x86.X86Program({'main': si_stmts(prog.stmts)})
 
 
 ##################################################
@@ -85,6 +157,8 @@ Saturation = Set[Color]
 # Instr ::= NamedInstr(instr_name, [Arg]) | Callq(str) | Retq()
 # X86 ::= X86Program(Dict[str, [Instr]])
 
+
+# Only different pass from compiler here
 def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     """
     Assigns homes to variables in the input program. Allocates registers and
@@ -99,14 +173,50 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     # utilities
     # --------------------------------------------------
 
+    def vars_of(a: x86.Arg) -> Set[x86.Var]:
+        match a:
+            case x86.Var(x):
+                return {x86.Var(x)}
+            case _:
+                return set()
+
+    # Ctrl-H to get class hierarchy
+    def reads_of(i: x86.Instr) -> Set[x86.Var]:
+        match i:
+            case x86.NamedInstr('addq', [a1, a2]):
+                # addq reads both args so return the set of vars in a1 and a2
+                return vars_of(a1).union(vars_of(a2))
+            case x86.NamedInstr('movq', [a1, a2]):
+                # movq reads a1
+                return vars_of(a1)
+            # The other cases are callq and retq, neither of which have args
+            case _:
+                return set()
+
+    def writes_of(i: x86.Instr) -> Set[x86.Var]:
+        match i:
+            case x86.NamedInstr('addq', [a1, a2]):
+                return vars_of(a2)
+            case x86.NamedInstr('movq', [a1, a2]):
+                return vars_of(a2)
+            # The other cases are callq and retq, neither of which have args
+            case _:
+                return set()
+
     # --------------------------------------------------
     # liveness analysis
     # --------------------------------------------------
+
     def ul_instr(i: x86.Instr, live_after: Set[x86.Var]) -> Set[x86.Var]:
-        pass
+        return live_after.difference(writes_of(i)).union(reads_of(i))
 
     def ul_block(instrs: List[x86.Instr]) -> List[Set[x86.Var]]:
-        pass
+        live_after_sets = []
+        current_live_after = set()
+        for i in reversed(instrs):
+            live_after_sets.append(current_live_after)
+            current_live_after = ul_instr(i, current_live_after)
+        return list(reversed(live_after_sets))
 
     # --------------------------------------------------
     # interference graph
@@ -134,8 +244,8 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     # Step 1: Perform liveness analysis
     blocks = program.blocks
     # TODO: run the liveness analysis
-    live_after_sets = None
-    log_ast('live-after sets', live_after_sets)
+    live_after_sets = None # call ul_block
+    log_ast('live-after sets', live_after_sets) # This will print out live-after sets
 
     # Step 2: Build the interference graph
     interference_graph = InterferenceGraph()
@@ -173,7 +283,7 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
 ##################################################
 # patch-instructions
 ##################################################
-
+# Same as compiler 2
 def patch_instructions(program: x86.X86Program) -> x86.X86Program:
     """
     Patches instructions with two memory location inputs, using %rax as a temporary location.
@@ -181,19 +291,63 @@ def patch_instructions(program: x86.X86Program) -> x86.X86Program:
     :return: A patched x86 program.
     """
 
-    pass
+    def pi_instr(i: x86.Instr) -> List[x86.Instr]:
+        new_instrs = []
+        match i:
+            case x86.NamedInstr('movq', [x86.Deref(r1, o1), x86.Deref(r2, o2)]):
+                new_instrs.append(x86.NamedInstr('movq', [x86.Deref(r1, o1), x86.Reg('rax')]))
+                new_instrs.append(x86.NamedInstr('movq', [x86.Reg('rax'), x86.Deref(r2, o2)]))
+            case x86.NamedInstr('addq', [x86.Deref(r1, o1), x86.Deref(r2, o2)]):
+                new_instrs.append(x86.NamedInstr('movq', [x86.Deref(r1, o1), x86.Reg('rax')]))
+                new_instrs.append(x86.NamedInstr('addq', [x86.Reg('rax'), x86.Deref(r2, o2)]))
+            # Add exception here
+            case _r:
+                new_instrs.append(_r)
+        return new_instrs
+
+    def pi_block(instrs: List[x86.Instr]) -> List[x86.Instr]:
+        new_instrs = []
+        for i in instrs:
+            new_instrs.extend(pi_instr(i))
+        return new_instrs
+
+    blocks = program.blocks
+    new_blocks = {}
+
+    for item in blocks:
+        new_blocks[item] = pi_block(program.blocks[item])
+
+    return x86.X86Program(new_blocks, stack_space=program.stack_space)
 
 
 ##################################################
 # prelude-and-conclusion
 ##################################################
-
+# Same as compiler 2
 def prelude_and_conclusion(program: x86.X86Program) -> x86.X86Program:
     """
     Adds the prelude and conclusion for the program.
     :param program: An x86 program.
     :return: An x86 program, with prelude and conclusion.
     """
+
+    def pc_block(instrs: List[x86.Instr]) -> List[x86.Instr]:
+        new_instr = []
+        new_instr.extend([x86.NamedInstr('pushq', [x86.Reg("rbp")]),
+                         x86.NamedInstr('movq', [x86.Reg("rsp"), x86.Reg("rbp")]),
+                         x86.NamedInstr('subq', [x86.Immediate(program.stack_space), x86.Reg("rsp")])])
+        new_instr.extend(instrs)
+        new_instr.extend([x86.NamedInstr('addq', [x86.Immediate(program.stack_space), x86.Reg("rsp")]),
+                          x86.NamedInstr('popq', [x86.Reg('rbp')]),
+                          x86.Retq()])
+        return new_instr
+
+    blocks = program.blocks
+    new_blocks = {}
+    for item in blocks:
+        new_blocks[item] = pc_block(program.blocks[item])
+
+    return x86.X86Program(new_blocks, stack_space=program.stack_space)
 
     pass
 
