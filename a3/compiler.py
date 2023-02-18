@@ -169,13 +169,16 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     locations.
     """
 
+    homes: Dict[x86.Var, x86.Arg] = {}
+
     # --------------------------------------------------
     # utilities
     # --------------------------------------------------
-
+    all_vars = {}
     def vars_of(a: x86.Arg) -> Set[x86.Var]:
         match a:
             case x86.Var(x):
+                all_vars.add(a)
                 return {x86.Var(x)}
             case _:
                 return set()
@@ -233,6 +236,10 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
         - for i in range(len(instr)):
             - call bi_instr(instrs[i], live-after[i])
     """
+
+    """
+    Can build move graph while doing this too!
+    """
     def bi_instr(e: x86.Instr, live_after: Set[x86.Var], graph: InterferenceGraph):
         pass
 
@@ -242,12 +249,61 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     # --------------------------------------------------
     # graph coloring
     # --------------------------------------------------
+
     def color_graph(local_vars: Set[x86.Var], interference_graph: InterferenceGraph) -> Coloring:
-        pass
+
+        saturation_sets: Dict[x86.Var, Saturation] = {}
+        for v in local_vars:
+            saturation_sets[v] = set()
+
+        coloring = {}
+        vars_to_color = local_vars.copy()
+        # loop until there are no vars to color
+        while len(vars_to_color) > 0:
+            # Pick a variable to color based on the largest saturation set
+            # TODO: loop through vars_to_color, find the max size saturation set
+            # x = var_to_color ..
+
+            # Pick lowest color for it that's not in saturation set
+            # x_sat = saturation_sets[x]
+            # TODO: start at 0, increment unti, you find a number not in x_sat
+            # x_color = lowest_possible_color
+            coloring[x] = x_color
+
+            # Update the saturation sets
+            for y in interference_graph.neighbors(x):
+                if isinstance(y, x86.Var):
+                    saturation_sets[y].add(x_color)
+
+        return coloring
 
     # --------------------------------------------------
     # assigning homes
     # --------------------------------------------------
+
+    def ah_args(a: x86.Arg):
+        match a:
+            case x86.Reg(r):
+                return x86.Reg(r)
+            case x86.Immediate(i):
+                return x86.Immediate(i)
+            case x86.Var(x):
+                # Change: we will always know the home for x
+                # the whole point of register allocation was to
+                # pre-populate homes with a home for every single variable
+                # you can delete the else case
+                return homes[x86.Var(x)]
+
+    # This stays the same
+    def ah_instr(instr: x86.Instr):
+        match instr:
+            case x86.NamedInstr(op, args):
+                return x86.NamedInstr(op, [ah_args(a) for a in args])
+            case r:
+                return r
+
+    def ah_block(instr: List[x86.Instr]) -> List[x86.Instr]:
+        return [ah_instr(i) for i in instr]
 
     # --------------------------------------------------
     # main body of the pass
@@ -267,7 +323,7 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     log_ast('interference graph', interference_graph)
 
     # Step 3: Color the graph
-    coloring = None
+    coloring = color_graph(all_vars, interference_graph)
 
     # TODO: color the interference graph
 
@@ -282,15 +338,69 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
 
     # Step 4.1: Map colors to locations (the "color map")
     # TODO: step 4.1
+    # for each color in coloring, add a mapping in color_map to a location
+    # use stack locations when you run out
+    for color in set(coloring.values()):
+        pass
 
     # Step 4.2: Compose the "coloring" with the "color map" to get "homes"
     # TODO: step 4.2
+    for v in all_vars:
+        homes[v] = color_map[coloring[v]]
+
     log('homes', homes)
 
     # Step 5: replace variables with their homes
     # TODO: step 5
-    pass
+    # assign_homes from previous assignment should be able to do the rest!
+    def align(num_bytes: int) -> int:
+        if num_bytes % 16 == 0:
+            return num_bytes
+        else:
+            return num_bytes + 8
 
+    new_blocks = {}
+    blocks = program.blocks
+    for label, instrs in blocks.items():
+        new_blocks[label] = ah_block(instrs)
+
+    stack_space = ??? # something based on stack_locations_used
+
+    return x86.X86Program(new_blocks, stack_space=stack_space)
+
+####################MOVE BIASING###########################
+# online compiler does not implement move biasing
+# course website and book has some notes on this
+"""
+x=1
+y=2
+z=x
+
+x and y interfere with each other but x can share with z so can y
+
+should z share with y or should z share with x ?
+
+this ends up as:
+movq 1 r14
+movq 2 r15
+movq r14 r15
+
+But we could have flipped registers here and gotten
+
+movq 1 r15
+movq 2 r14
+movq r15 r15
+
+which could just be reduced in patch instructions that removes movq's that go to themselves
+
+How to do this?
+    - Look ahead to where values need to "end up"
+    - try to put them there to begin with
+
+Section 4.7 in book : big example
+
+
+"""
 
 ##################################################
 # patch-instructions
