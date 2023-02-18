@@ -221,6 +221,18 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     # --------------------------------------------------
     # interference graph
     # --------------------------------------------------
+    """
+        bi_instr:
+            - for each var v1 written ny instruction
+                - for each var v2 in the live-after set
+                    - add an edge between v1 and v2
+        """
+
+    """
+    bi_block:
+        - for i in range(len(instr)):
+            - call bi_instr(instrs[i], live-after[i])
+    """
     def bi_instr(e: x86.Instr, live_after: Set[x86.Var], graph: InterferenceGraph):
         pass
 
@@ -245,7 +257,7 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     blocks = program.blocks
     # TODO: run the liveness analysis
     live_after_sets = None # call ul_block
-    log_ast('live-after sets', live_after_sets) # This will print out live-after sets
+    log_ast('live-after sets', live_after_sets)  # This will print out live-after sets
 
     # Step 2: Build the interference graph
     interference_graph = InterferenceGraph()
