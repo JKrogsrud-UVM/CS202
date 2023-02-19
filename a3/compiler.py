@@ -174,7 +174,9 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     # --------------------------------------------------
     # utilities
     # --------------------------------------------------
-    all_vars = {}
+
+    all_vars = set()
+
     def vars_of(a: x86.Arg) -> Set[x86.Var]:
         match a:
             case x86.Var(x):
@@ -226,7 +228,7 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     # --------------------------------------------------
     """
         bi_instr:
-            - for each var v1 written ny instruction
+            - for each var v1 written by instruction
                 - for each var v2 in the live-after set
                     - add an edge between v1 and v2
         """
@@ -240,11 +242,17 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     """
     Can build move graph while doing this too!
     """
+
     def bi_instr(e: x86.Instr, live_after: Set[x86.Var], graph: InterferenceGraph):
-        pass
+        for v1 in writes_of(e):
+            for v2 in live_after:
+                # Graph class deals with case v1 = v2
+                graph.add_edge(v1,v2)
+
 
     def bi_block(instrs: List[x86.Instr], live_afters: List[Set[x86.Var]], graph: InterferenceGraph):
-        pass
+        for i in range(len(instrs)):
+            bi_instr(instrs[i], live_afters[i], graph)
 
     # --------------------------------------------------
     # graph coloring
@@ -310,8 +318,9 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     # --------------------------------------------------
 
     # Step 1: Perform liveness analysis
+
     blocks = program.blocks
-    # TODO: run the liveness analysis
+    #run the liveness analysis
     live_after_sets = None # call ul_block
     log_ast('live-after sets', live_after_sets)  # This will print out live-after sets
 
