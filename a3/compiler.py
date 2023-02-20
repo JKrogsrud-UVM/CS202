@@ -229,8 +229,10 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
 
     def bi_instr(e: x86.Instr, live_after: Set[x86.Var], graph: InterferenceGraph, move_relation_graph: InterferenceGraph):
         match e:
-            case x86.NamedInstr("movq", [a1, a2]):
-                move_relation_graph.add_edge(a1, a2)
+            case x86.NamedInstr("movq", [x86.Var(a1), x86.Var(a2)]):
+                move_relation_graph.add_edge(x86.Var(a1), x86.Var(a2))
+            case _r:
+                pass
         for v1 in writes_of(e):
             for v2 in live_after:
                 # Graph class deals with case v1 = v2
@@ -253,30 +255,73 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
 
         coloring = {}
         vars_to_color = local_vars.copy()
+
         # loop until there are no vars to color
         while len(vars_to_color) > 0:
             # Pick a variable to color based on the largest saturation set
-            #TODO: change this for move biasing
-            var_to_color = None
+            # Tie break with move_relation_graph
+            poss_var_to_color = []
             max_sat = -1
+
+            # First we build a list of possible variables to color
             for var in vars_to_color:
                 var_sat_size = len(saturation_sets[var])
                 if var_sat_size > max_sat:
-                    var_to_color = var
-                    max_sat = var_sat_size
+                    poss_var_to_color = [var]  # It's biggest so far so make it the new list
+                    max_sat = var_sat_size  # new number to beat
+                elif var_sat_size == max_sat:
+                    poss_var_to_color.append(var)  # It's at least as big as best so add it to list for tie-breaking
+                    # no new max_sat
 
-            # Pick lowest color for it that's not in saturation set
-            x_sat = saturation_sets[var_to_color]
-            low_color = 0
-            while low_color in x_sat:
-                low_color = low_color + 1
+            # poss_var_to_color will have one or more variables as options
 
-            coloring[var_to_color] = low_color
+            if len(poss_var_to_color) > 1:
+                # Chose one that has an available color that is move-related to a variable with that color
+                var_and_color_picked = False
+
+                # Each var in poss_var_to_color is checked to see if it has any move_relatives colored
+                for var in poss_var_to_color:
+                    if not var_and_color_picked:
+                        for move_relative in move_relation_graph.neighbors(var):
+                            if isinstance(move_relative, x86.Var):
+                                # It is very likely that move_relative is not yet in the coloring dictionary
+                                # so we first check that it is
+                                if move_relative in coloring and coloring[move_relative] not in saturation_sets[var]:
+                                    var_to_color = var
+                                    color_to_use = coloring[move_relative]
+                                    var_and_color_picked = True
+                if var_and_color_picked:
+                    coloring[var_to_color] = color_to_use
+                else:
+                    # In this case we didn't find any tie-break so do as we would usually
+                    var_to_color = poss_var_to_color[0]
+
+                    # Pick lowest color for it that's not in saturation set
+                    x_sat = saturation_sets[var_to_color]
+                    color_to_use = 0
+
+                    while color_to_use in x_sat:
+                        color_to_use = color_to_use + 1
+
+                    coloring[var_to_color] = color_to_use
+
+            else:
+                # only one item in list
+                var_to_color = poss_var_to_color[0]
+
+                # Pick lowest color for it that's not in saturation set
+                x_sat = saturation_sets[var_to_color]
+                color_to_use = 0
+
+                while color_to_use in x_sat:
+                    color_to_use = color_to_use + 1
+
+                coloring[var_to_color] = color_to_use
 
             # Update the saturation sets
             for y in interference_graph.neighbors(var_to_color):
                 if isinstance(y, x86.Var):
-                    saturation_sets[y].add(low_color)
+                    saturation_sets[y].add(color_to_use)
 
             # Remove var_to_color from set vars_to_color
             vars_to_color.remove(var_to_color)
@@ -327,12 +372,13 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     interference_graph = InterferenceGraph()
     move_relation_graph = InterferenceGraph()
 
-    bi_block(main_instrs, live_after_sets, interference_graph)
+    bi_block(main_instrs, live_after_sets, interference_graph, move_relation_graph)
 
     log_ast('interference graph', interference_graph)
+    log_ast('move relation graph', move_relation_graph)
 
     # Step 3: Color the graph
-    coloring = color_graph(all_vars, interference_graph)
+    coloring = color_graph(all_vars, interference_graph, move_relation_graph)
 
     log('coloring', coloring)
 
@@ -384,7 +430,6 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
 # online compiler does not implement move biasing
 # course website and book has some notes on this
 
-
 """
 x=1
 y=2
@@ -434,7 +479,6 @@ def patch_instructions(program: x86.X86Program) -> x86.X86Program:
             case x86.NamedInstr('addq', [x86.Deref(r1, o1), x86.Deref(r2, o2)]):
                 new_instrs.append(x86.NamedInstr('movq', [x86.Deref(r1, o1), x86.Reg('rax')]))
                 new_instrs.append(x86.NamedInstr('addq', [x86.Reg('rax'), x86.Deref(r2, o2)]))
-            # Add exception here
             case _r:
                 new_instrs.append(_r)
         return new_instrs
