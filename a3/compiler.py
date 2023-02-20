@@ -479,6 +479,10 @@ def patch_instructions(program: x86.X86Program) -> x86.X86Program:
             case x86.NamedInstr('addq', [x86.Deref(r1, o1), x86.Deref(r2, o2)]):
                 new_instrs.append(x86.NamedInstr('movq', [x86.Deref(r1, o1), x86.Reg('rax')]))
                 new_instrs.append(x86.NamedInstr('addq', [x86.Reg('rax'), x86.Deref(r2, o2)]))
+            # New case for move biasing
+            case x86.NamedInstr('movq', args):
+                if args[0] != args[1]:
+                    new_instrs.append(x86.NamedInstr('movq', args))
             case _r:
                 new_instrs.append(_r)
         return new_instrs
