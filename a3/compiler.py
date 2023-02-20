@@ -5,6 +5,8 @@ import sys
 import itertools
 import traceback
 
+from numpy.distutils.fcompiler import none
+
 from cs202_support.python import *
 import cs202_support.x86 as x86
 import constants
@@ -269,19 +271,27 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
         # loop until there are no vars to color
         while len(vars_to_color) > 0:
             # Pick a variable to color based on the largest saturation set
-            # TODO: loop through vars_to_color, find the max size saturation set
-            # x = var_to_color ..
+            #TODO: change this for move biasing
+            var_to_color = None
+            max_sat = -1
+            for var in vars_to_color:
+                var_sat_size = len(saturation_sets[var])
+                if var_sat_size > max_sat:
+                    var_to_color = var
+                    max_sat = var_sat_size
 
             # Pick lowest color for it that's not in saturation set
-            # x_sat = saturation_sets[x]
-            # TODO: start at 0, increment unti, you find a number not in x_sat
-            # x_color = lowest_possible_color
-            coloring[x] = x_color
+            x_sat = saturation_sets[var_to_color]
+            low_color = 0
+            while low_color in x_sat:
+                low_color = low_color + 1
+
+            coloring[var_to_color] = low_color
 
             # Update the saturation sets
-            for y in interference_graph.neighbors(x):
+            for y in interference_graph.neighbors(var_to_color):
                 if isinstance(y, x86.Var):
-                    saturation_sets[y].add(x_color)
+                    saturation_sets[y].add(low_color)
 
         return coloring
 
