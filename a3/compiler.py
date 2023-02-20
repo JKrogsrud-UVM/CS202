@@ -227,25 +227,25 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     # interference graph
     # --------------------------------------------------
 
-
-    # TODO: Build move biasing in here
-
-    def bi_instr(e: x86.Instr, live_after: Set[x86.Var], graph: InterferenceGraph):
+    def bi_instr(e: x86.Instr, live_after: Set[x86.Var], graph: InterferenceGraph, move_relation_graph: InterferenceGraph):
+        match e:
+            case x86.NamedInstr("movq", [a1, a2]):
+                move_relation_graph.add_edge(a1, a2)
         for v1 in writes_of(e):
             for v2 in live_after:
                 # Graph class deals with case v1 = v2
                 graph.add_edge(v1, v2)
 
 
-    def bi_block(instrs: List[x86.Instr], live_afters: List[Set[x86.Var]], graph: InterferenceGraph):
+    def bi_block(instrs: List[x86.Instr], live_afters: List[Set[x86.Var]], graph: InterferenceGraph, move_relation_graph: InterferenceGraph):
         for i in range(len(instrs)):
-            bi_instr(instrs[i], live_afters[i], graph)
+            bi_instr(instrs[i], live_afters[i], graph, move_relation_graph)
 
     # --------------------------------------------------
     # graph coloring
     # --------------------------------------------------
 
-    def color_graph(local_vars: Set[x86.Var], interference_graph: InterferenceGraph) -> Coloring:
+    def color_graph(local_vars: Set[x86.Var], interference_graph: InterferenceGraph, move_relation_graph: InterferenceGraph) -> Coloring:
 
         saturation_sets: Dict[x86.Var, Saturation] = {}
         for v in local_vars:
@@ -325,6 +325,7 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
 
     # Step 2: Build the interference graph
     interference_graph = InterferenceGraph()
+    move_relation_graph = InterferenceGraph()
 
     bi_block(main_instrs, live_after_sets, interference_graph)
 
