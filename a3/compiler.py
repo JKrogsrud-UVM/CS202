@@ -5,8 +5,6 @@ import sys
 import itertools
 import traceback
 
-from numpy.distutils.fcompiler import none
-
 from cs202_support.python import *
 import cs202_support.x86 as x86
 import constants
@@ -228,28 +226,15 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     # --------------------------------------------------
     # interference graph
     # --------------------------------------------------
-    """
-        bi_instr:
-            - for each var v1 written by instruction
-                - for each var v2 in the live-after set
-                    - add an edge between v1 and v2
-        """
 
-    """
-    bi_block:
-        - for i in range(len(instr)):
-            - call bi_instr(instrs[i], live-after[i])
-    """
 
-    """
-    Can build move graph while doing this too!
-    """
+    # TODO: Build move biasing in here
 
     def bi_instr(e: x86.Instr, live_after: Set[x86.Var], graph: InterferenceGraph):
         for v1 in writes_of(e):
             for v2 in live_after:
                 # Graph class deals with case v1 = v2
-                graph.add_edge(v1,v2)
+                graph.add_edge(v1, v2)
 
 
     def bi_block(instrs: List[x86.Instr], live_afters: List[Set[x86.Var]], graph: InterferenceGraph):
@@ -293,6 +278,9 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
                 if isinstance(y, x86.Var):
                     saturation_sets[y].add(low_color)
 
+            # Remove var_to_color from set vars_to_color
+            vars_to_color.remove(var_to_color)
+
         return coloring
 
     # --------------------------------------------------
@@ -330,21 +318,20 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     # Step 1: Perform liveness analysis
 
     blocks = program.blocks
-    #run the liveness analysis
-    live_after_sets = None # call ul_block
+    main_instrs = blocks['main']
+    live_after_sets = ul_block(main_instrs)
+
     log_ast('live-after sets', live_after_sets)  # This will print out live-after sets
 
     # Step 2: Build the interference graph
     interference_graph = InterferenceGraph()
 
-    # TODO: build the interference graph
+    bi_block(main_instrs, live_after_sets, interference_graph)
 
     log_ast('interference graph', interference_graph)
 
     # Step 3: Color the graph
     coloring = color_graph(all_vars, interference_graph)
-
-    # TODO: color the interference graph
 
     log('coloring', coloring)
 
@@ -356,22 +343,26 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     stack_locations_used = 0
 
     # Step 4.1: Map colors to locations (the "color map")
-    # TODO: step 4.1
     # for each color in coloring, add a mapping in color_map to a location
     # use stack locations when you run out
     for color in set(coloring.values()):
-        pass
+        if len(available_registers) > 0:
+            color_map[color] = x86.Reg(available_registers.pop())
+        else:
+            # Use stack location
+            stack_locations_used += 1
+            offset = -8 * stack_locations_used
+            color_map[color] = x86.Deref("rbp", offset)
 
     # Step 4.2: Compose the "coloring" with the "color map" to get "homes"
-    # TODO: step 4.2
     for v in all_vars:
         homes[v] = color_map[coloring[v]]
 
     log('homes', homes)
 
     # Step 5: replace variables with their homes
-    # TODO: step 5
     # assign_homes from previous assignment should be able to do the rest!
+
     def align(num_bytes: int) -> int:
         if num_bytes % 16 == 0:
             return num_bytes
@@ -383,13 +374,16 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     for label, instrs in blocks.items():
         new_blocks[label] = ah_block(instrs)
 
-    stack_space = ??? # something based on stack_locations_used
+    stack_space = align(8 * stack_locations_used)  # something based on stack_locations_used
 
     return x86.X86Program(new_blocks, stack_space=stack_space)
 
-####################MOVE BIASING###########################
+
+# ####################MOVE BIASING###########################
 # online compiler does not implement move biasing
 # course website and book has some notes on this
+
+
 """
 x=1
 y=2
@@ -417,8 +411,6 @@ How to do this?
     - try to put them there to begin with
 
 Section 4.7 in book : big example
-
-
 """
 
 ##################################################
