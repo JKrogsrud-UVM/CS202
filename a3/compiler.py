@@ -392,6 +392,7 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     # Step 4.1: Map colors to locations (the "color map")
     # for each color in coloring, add a mapping in color_map to a location
     # use stack locations when you run out
+    ######### This coloring might not do as we need as it might need to be sorted ###########
     for color in set(coloring.values()):
         if len(available_registers) > 0:
             color_map[color] = x86.Reg(available_registers.pop())
