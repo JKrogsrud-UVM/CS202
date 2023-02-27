@@ -40,7 +40,6 @@ def gensym(x):
 # remove-complex-opera*
 ##################################################
 
-# Same as compiler 2
 def rco(prog: Program) -> Program:
     """
     Removes complex operands. After this pass, the arguments to operators (unary and binary
@@ -73,6 +72,8 @@ def rco(prog: Program) -> Program:
                 return Assign(x, rco_exp(e, bindings))
             case Print(e):
                 return Print(rco_exp(e, bindings))
+            case _:
+                raise Exception('rco_stmt', s)
 
     def rco_stmts(stmts: List[Stmt]) -> List[Stmt]:
         new_stmts = []
@@ -80,14 +81,12 @@ def rco(prog: Program) -> Program:
             bindings = {}
             new_stmt = rco_stmt(stmt, bindings)
             for b in bindings:
-                # print(b, bindings[b])
                 new_stmts.append(Assign(b, bindings[b]))
             new_stmts.append(new_stmt)
         return new_stmts
 
     return Program(rco_stmts(prog.stmts))
 
-# Same as compiler 2
 ##################################################
 # select-instructions
 ##################################################
@@ -112,9 +111,8 @@ def select_instructions(prog: Program) -> x86.X86Program:
                 return x86.Var(x)
             case Constant(n):
                 return x86.Immediate(n)
-            # INSTRUCTOR SOLUTION
-            # case _:
-            # Exception
+            case _:
+                raise Exception('si_atm', atm)
 
     def si_stmt(stmt: Stmt) -> List[x86.Instr]:
 
@@ -132,6 +130,8 @@ def select_instructions(prog: Program) -> x86.X86Program:
                 x86atm = si_atm(atm)
                 return [x86.NamedInstr("movq", [x86atm, x86.Reg("rdi")]),
                         x86.Callq("print_int")]
+            case _:
+                raise Exception('si_stmt', stmt)
 
     def si_stmts(stmts: List[Stmt]) -> List[x86.Instr]:
         instrs = []
@@ -179,11 +179,15 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
 
     def vars_of(a: x86.Arg) -> Set[x86.Var]:
         match a:
+            case x86.Immediate(i):
+                return set()
+            case x86.Reg(r):
+                return set()
             case x86.Var(x):
                 all_vars.add(a)
                 return {x86.Var(x)}
             case _:
-                return set()
+                raise Exception('ul_arg', a)
 
     # Ctrl-H to get class hierarchy
     def reads_of(i: x86.Instr) -> Set[x86.Var]:
@@ -346,6 +350,7 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
                 return homes[x86.Var(x)]
 
     # This stays the same
+    ##### CHECK INSTRUCTOR VERSION FOR SOMETHING WITH JMP #####
     def ah_instr(instr: x86.Instr):
         match instr:
             case x86.NamedInstr(op, args):

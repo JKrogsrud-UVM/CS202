@@ -78,7 +78,49 @@ def rco(prog: Program) -> Program:
     :return: An Lif program with atomic operator arguments.
     """
 
-    pass
+    def rco_exp(e: Expr, bindings: Dict[str, Expr]) -> Expr:
+        match e:
+            case Constant(n):
+                return Constant(n)
+            case Var(x):
+                return Var(x)
+            case Prim(op, args):
+                # new_args = [rco_exp(a) for a in args]
+                new_args = []
+                for a in args:
+                    new_args.append(rco_exp(a, bindings))
+                    # recursive call to rco_exp should make the argument atomic
+                tmp = gensym('tmp')
+                # bind tmp to prim(op, new_args)
+                bindings[tmp] = Prim(op, new_args)
+                return Var(tmp)
+
+    def rco_stmt(s: Stmt, bindings: Dict[str, Expr]) -> Stmt:
+        match s:
+            case Assign(x, e):
+                return Assign(x, rco_exp(e, bindings))
+            case Print(e):
+                return Print(rco_exp(e, bindings))
+            case If(condition, then_stmts, else_stmts):
+                return If(rco_exp(condition, bindings),
+                          rco_stmts(then_stmts),
+                          rco_stmts(else_stmts))
+            case _:
+                raise Exception('rco_stmt', s)
+
+
+    def rco_stmts(stmts: List[Stmt]) -> List[Stmt]:
+        new_stmts = []
+        for stmt in stmts:
+            bindings = {}
+            new_stmt = rco_stmt(stmt, bindings)
+            for b in bindings:
+                # print(b, bindings[b])
+                new_stmts.append(Assign(b, bindings[b]))
+            new_stmts.append(new_stmt)
+        return new_stmts
+
+    return Program(rco_stmts(prog.stmts))
 
 
 ##################################################
@@ -97,6 +139,8 @@ def explicate_control(prog: Program) -> cif.CProgram:
     :param prog: An Lif Expression
     :return: A Cif Program
     """
+
+
 
     pass
 
