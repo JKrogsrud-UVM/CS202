@@ -58,7 +58,74 @@ def typecheck(program: Program) -> Program:
     :return: The program, if it is well-typed
     """
 
-    pass
+    def tc_exp(e: Expr, env: TEnv) -> type:
+        match e:
+            case Var(x):
+                if x in env:
+                    return env[x]
+                else:
+                    raise Exception('Variable never assigned a value', x)
+            case Constant(n):
+                return type(n)
+            case Prim("add", [e1, e2]):
+                assert tc_exp(e1, env) == int
+                assert tc_exp(e2, env) == int
+                return int
+            case Prim("sub", [e1, e2]):
+                assert tc_exp(e1, env) == int
+                assert tc_exp(e2, env) == int
+                return int
+            case Prim("not", [e1, e2]):
+                assert tc_exp(e1, env) == tc_exp(e2, env)
+                return bool
+            case Prim("or", [e1, e2]):
+                assert tc_exp(e1, env) == bool
+                assert tc_exp(e2, env) == bool
+                return bool
+            case Prim("eq", [e1, e2]):
+                assert tc_exp(e1, env) == tc_exp(e2, env)
+                return bool
+            case Prim("gt", [e1, e2]):
+                assert tc_exp(e1, env) == int
+                assert tc_exp(e2, env) == int
+                return bool
+            case Prim("gte", [e1, e2]):
+                assert tc_exp(e1, env) == int
+                assert tc_exp(e2, env) == int
+                return bool
+            case Prim("lt", [e1, e2]):
+                assert tc_exp(e1, env) == int
+                assert tc_exp(e2, env) == int
+                return bool
+            case Prim("lte", [e1, e2]):
+                assert tc_exp(e1, env) == int
+                assert tc_exp(e2, env) == int
+                return bool
+
+    def tc_stmt(s: Stmt, env: TEnv):
+        match s:
+            case Assign(x, e):
+                if x in env:
+                    assert env[x] == tc_exp(e, env)
+                else:
+                    env[x] = tc_exp(e, env)
+            case Print(e):
+                tc_exp(e, env)
+            case If(e1, s1, s2):
+                assert tc_exp(e1, env) == bool
+                for stmt in s1:
+                    tc_stmt(stmt, env)
+                for stmt in s2:
+                    tc_stmt(stmt, env)
+
+    def tc_stmts(stmts: List[Stmt]):
+        env = {}
+        for stmt in stmts:
+            tc_stmt(stmt, env)
+
+    tc_stmts(program.stmts)
+
+    return program
 
 
 ##################################################
@@ -139,10 +206,62 @@ def explicate_control(prog: Program) -> cif.CProgram:
     :param prog: An Lif Expression
     :return: A Cif Program
     """
+    #pass should have a global basic_blocks: Dict[str, List[cif.Stmt]]
+    basic_blocks: Dict[str, List[cif.Stmt]] = {}
+
+    #pass should have a create_block gunction that adds a new block to basic_blocks with a unique name (using gensym)
+    def create_block(stmts: List[cif.Stmt]) -> str:
+        new_label = gensym('label')
+        basic_blocks[new_label] = stmts
+        return new_label
+
+    # - `ec_atm`
+    # - Constants => cif.Constants
+    # - Var => cif.Var
+
+    def ec_atm(e: Expr) -> cif.Atm:
+        pass
+    # - `ec_expr` compiles an expression into a Cin expression
+    # - Prim(op, args) => cif.Prim(op, new_args)
+    # - else call ec_atm
+
+    def ec_expr(e: Expr) -> cif.Expr:
+        pass
+
+    # - `ec_stmt` takes a statement and a continuation and returns a list of Cif statements
+    # - Assign(x,e) => [cif.Assign(x, ec_expr(e))] + cont
+    # - Print(e) => [cif.Print(ec_expr(e))] + cont
+    # - If (condition, then_stmts, else_stmts) =>
+    # - cond_label = create block for cont
+    # - then_label = create block for ec_stmts(then_stmts, [cif.Goto(cond_label)])
+    # - else_label = create block for ec_stmts(else_stmts, [cif.Goto(cond_label)])
+    # - return[cif(ec_expr(condition), cif.Goto(then_label), cif.Goto(else_label)]
+
+    def ec_stmt(s: Stmt, cont: List[cif.Stmt]) -> List[cif.Stmt]:
+        match s:
+            case Assign(x, e):
+                new_stmt: List[cif.Stmt] = [cif.Assign(x, ec_expr(e))]
+                return new_stmt + cont
+            case Print(e):
+                pass
 
 
+    # - `ec_stmts` takes a list of statements and a continuation, returns a list Cif statements
+    # - process list of statments in reverse
+    # - update current continuation by calling ec_stmt on each stmt and setting the continuation to whatever comes back
 
-    pass
+    def ec_stmts(stmts: List[Stmt], cont: List[cif.Stmt]) -> List[cif.Stmt]:
+        for s in reversed(stmts):
+            cont = ec_stmt(s, cont)
+        return cont
+
+    # - main body of the pass
+    # - start with continuation [cif.Return(0)]
+    # - call ec_stmts on statements of the program
+    # - set basic_blocks['start'] to the result
+    # TODO: fill this in
+
+    return cif.CProgram(basic_blocks)
 
 
 ##################################################
