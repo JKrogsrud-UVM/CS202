@@ -200,6 +200,7 @@ def rco(prog: Program) -> Program:
 # Stmts ::= List[Stmt]
 # LVar  ::= Program(Stmts)
 
+# RCO outputs: Expr: Var(x) | Constant(n) | Prim(op, List[Expr])
 def explicate_control(prog: Program) -> cif.CProgram:
     """
     Transforms an Lif Expression into a Cif program.
@@ -218,14 +219,23 @@ def explicate_control(prog: Program) -> cif.CProgram:
     # - `ec_atm`
     # - Constants => cif.Constants
     # - Var => cif.Var
-
     def ec_atm(e: Expr) -> cif.Atm:
-        pass
+        match e:
+            case Constant(c):
+                return cif.Constant(c)
+            case Var(x):
+                return cif.Var(x)
+
     # - `ec_expr` compiles an expression into a Cin expression
     # - Prim(op, args) => cif.Prim(op, new_args)
     # - else call ec_atm
 
     def ec_expr(e: Expr) -> cif.Expr:
+        match e:
+            case Prim(op, args):
+                return cif.Prim(op, [ec_atm(arg) for arg in args])
+            case _:
+                return ec_atm(e)
         pass
 
     # - `ec_stmt` takes a statement and a continuation and returns a list of Cif statements
@@ -243,7 +253,17 @@ def explicate_control(prog: Program) -> cif.CProgram:
                 new_stmt: List[cif.Stmt] = [cif.Assign(x, ec_expr(e))]
                 return new_stmt + cont
             case Print(e):
-                pass
+                new_stmt: List[cif.Stmt] = [cif.Print(e)]
+                return new_stmt + cont
+            case If(condition, then_stmts, else_stmts):
+                cont_label = gensym('label')
+                basic_blocks[cont_label] = cont
+                then_label = gensym('label')
+                basic_blocks[then_label] = ec_stmts(then_stmts, [cif.Goto(cont_label)])
+                else_label = gensym('label')
+                basic_blocks[else_label] = ec_stmts(else_stmts, [cif.Goto(cont_label)])
+                return [cif.If(ec_expr(condition), cif.Goto(then_label), cif.Goto(else_label))]
+
 
 
     # - `ec_stmts` takes a list of statements and a continuation, returns a list Cif statements
@@ -259,8 +279,9 @@ def explicate_control(prog: Program) -> cif.CProgram:
     # - start with continuation [cif.Return(0)]
     # - call ec_stmts on statements of the program
     # - set basic_blocks['start'] to the result
-    # TODO: fill this in
 
+    cont = [cif.Return(cif.Constant(0))]
+    basic_blocks['start'] = ec_stmts(prog.stmts, cont)
     return cif.CProgram(basic_blocks)
 
 
@@ -282,7 +303,63 @@ def select_instructions(prog: cif.CProgram) -> x86.X86Program:
     :return: a pseudo-x86 program
     """
 
-    pass
+    def si_atm(atm: Expr) -> x86.Arg:
+        match atm:
+            case cif.Var(x):
+                return x86.Var(x)
+            case cif.Constant(n):
+                return x86.Immediate(n)
+            case _:
+                raise Exception('si_atm', atm)
+
+    #"add" | "sub" | "not" | "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte"
+
+    def si_stmt(stmt: cif.Stmt) -> List[x86.Instr]:
+        match stmt:
+            case Assign(x, cif.Prim(op, [atm1, atm2])):
+                if op == 'add':
+                    x86atm1 = si_atm(atm1)
+                    x86atm2 = si_atm(atm2)
+                    return [x86.NamedInstr("movq", [x86atm1, x86.Reg("rax")]),
+                            x86.NamedInstr("addq", [x86atm2, x86.Reg("rax")]),
+                            x86.NamedInstr("movq", [x86.Reg("rax"), x86.Var(x)])]
+                elif op == 'sub':
+                    pass
+                elif op == 'not':
+                    pass
+                elif op == 'or':
+                    pass
+                elif op == 'and':
+                    pass
+                elif op == 'eq':
+                    pass
+                elif op == 'gt':
+                    pass
+                elif op == 'gte':
+                    pass
+                elif op == 'lt':
+                    pass
+                elif op == 'lte':
+                    pass
+
+            case Assign(x, atm1):
+                x86atm1 = si_atm(atm1)
+                return [x86.NamedInstr("movq", [x86atm1, x86.Var(x)])]
+            case Print(atm):
+                x86atm = si_atm(atm)
+                return [x86.NamedInstr("movq", [x86atm, x86.Reg("rdi")]),
+                        x86.Callq("print_int")]
+            case _:
+                raise Exception('si_stmt', stmt)
+
+    def si_stmts(stmts: List[cif.Stmt]) -> List[x86.Instr]:
+        instrs = []
+        for stmt in stmts:
+            i = si_stmt(stmt)
+            instrs.extend(i)
+        return instrs
+
+    return x86.X86Program({'main': si_stmts(prog.stmts)})
 
 
 ##################################################
