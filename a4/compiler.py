@@ -75,10 +75,14 @@ def typecheck(program: Program) -> Program:
                 assert tc_exp(e1, env) == int
                 assert tc_exp(e2, env) == int
                 return int
-            case Prim("not", [e1, e2]):
-                assert tc_exp(e1, env) == tc_exp(e2, env)
-                return bool
+            # case Prim("not", [e1, e2]):
+            #     assert tc_exp(e1, env) == tc_exp(e2, env)
+            #     return bool
             case Prim("or", [e1, e2]):
+                assert tc_exp(e1, env) == bool
+                assert tc_exp(e2, env) == bool
+                return bool
+            case Prim("and", [e1, e2]):
                 assert tc_exp(e1, env) == bool
                 assert tc_exp(e2, env) == bool
                 return bool
@@ -253,7 +257,7 @@ def explicate_control(prog: Program) -> cif.CProgram:
                 new_stmt: List[cif.Stmt] = [cif.Assign(x, ec_expr(e))]
                 return new_stmt + cont
             case Print(e):
-                new_stmt: List[cif.Stmt] = [cif.Print(e)]
+                new_stmt: List[cif.Stmt] = [cif.Print(ec_expr(e))]
                 return new_stmt + cont
             case If(condition, then_stmts, else_stmts):
                 cont_label = gensym('label')
@@ -288,7 +292,7 @@ def explicate_control(prog: Program) -> cif.CProgram:
 ##################################################
 # select-instructions
 ##################################################
-# op    ::= "add" | "sub" | "not" | "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte"
+# op    ::= "add" | "sub" | "not" <= don't think we are doing this one| "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte"
 # Atm   ::= Var(x) | Constant(n)
 # Expr  ::= Atm | Prim(op, List[Expr])
 # Stmt  ::= Assign(x, Expr) | Print(Expr)
@@ -303,52 +307,66 @@ def select_instructions(prog: cif.CProgram) -> x86.X86Program:
     :return: a pseudo-x86 program
     """
 
-    def si_atm(atm: Expr) -> x86.Arg:
+    def si_atm(atm: cif.Expr) -> x86.Arg:
         match atm:
             case cif.Var(x):
                 return x86.Var(x)
             case cif.Constant(n):
                 return x86.Immediate(n)
             case _:
-                raise Exception('si_atm', atm)
+                return atm
 
-    #"add" | "sub" | "not" | "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte"
+    #  "add" | "sub" | "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte"
+
+    comparison_codes: Dict[str, str] = {
+        "eq": "e",
+        "gt": "g",
+        "gte": "ge",
+        "lt": "l",
+        "lte": "le"
+    }
 
     def si_stmt(stmt: cif.Stmt) -> List[x86.Instr]:
         match stmt:
-            case Assign(x, cif.Prim(op, [atm1, atm2])):
+            case cif.Assign(x, cif.Prim(op, [atm1, atm2])):
+                x86atm1 = si_atm(atm1)
+                x86atm2 = si_atm(atm2)
                 if op == 'add':
-                    x86atm1 = si_atm(atm1)
-                    x86atm2 = si_atm(atm2)
                     return [x86.NamedInstr("movq", [x86atm1, x86.Reg("rax")]),
                             x86.NamedInstr("addq", [x86atm2, x86.Reg("rax")]),
                             x86.NamedInstr("movq", [x86.Reg("rax"), x86.Var(x)])]
                 elif op == 'sub':
-                    pass
-                elif op == 'not':
-                    pass
+                    return [x86.NamedInstr("movq", [x86atm1, x86.Reg("rax")]),
+                            x86.NamedInstr("subq", [x86atm2, x86.Reg("rax")]),
+                            x86.NamedInstr("movq", [x86.Reg("rax"), x86.Var(x)])]
                 elif op == 'or':
-                    pass
+                    return [x86.NamedInstr("movq", [x86atm1, x86.Reg("rax")]),
+                            x86.NamedInstr("orq", [x86atm2, x86.Reg("rax")]),
+                            x86.NamedInstr("movq", [x86.Reg("rax"), x86.Var(x)])]
                 elif op == 'and':
-                    pass
-                elif op == 'eq':
-                    pass
-                elif op == 'gt':
-                    pass
-                elif op == 'gte':
-                    pass
-                elif op == 'lt':
-                    pass
-                elif op == 'lte':
-                    pass
-
-            case Assign(x, atm1):
+                    return [x86.NamedInstr("movq", [x86atm1, x86.Reg("rax")]),
+                            x86.NamedInstr("andq", [x86atm2, x86.Reg("rax")]),
+                            x86.NamedInstr("movq", [x86.Reg("rax"), x86.Var(x)])]
+                elif op in comparison_codes:
+                    return [x86.NamedInstr("cmpq", [x86atm2, x86atm1]),
+                            x86.Set(comparison_codes[op], x86.ByteReg("al")),
+                            x86.NamedInstr("movzbq", [x86.ByteReg("al"), x86.Var(x)])]
+            case cif.Assign(x, atm1):
                 x86atm1 = si_atm(atm1)
                 return [x86.NamedInstr("movq", [x86atm1, x86.Var(x)])]
-            case Print(atm):
+            case cif.Print(atm):
                 x86atm = si_atm(atm)
                 return [x86.NamedInstr("movq", [x86atm, x86.Reg("rdi")]),
                         x86.Callq("print_int")]
+            case cif.If(cif.Var(x), l1, l2):
+                return [x86.NamedInstr("cmpq", [x86.Var(x), x86.Immediate(1)]),
+                        x86.JmpIf("e", l1),
+                        x86.Jmp(l2)]
+            case cif.Goto(l):
+                return [x86.Jmp(l)]
+            case cif.Return(cif.Constant(c)):
+                return [x86.NamedInstr("movq", [x86.Immediate(c), x86.Reg("rax")]),
+                        x86.Jmp('conclusion')]
             case _:
                 raise Exception('si_stmt', stmt)
 
@@ -359,8 +377,12 @@ def select_instructions(prog: cif.CProgram) -> x86.X86Program:
             instrs.extend(i)
         return instrs
 
-    return x86.X86Program({'main': si_stmts(prog.stmts)})
+    new_prog: Dict[str: List[x86.Instr]] = {}
 
+    for label in prog.blocks:
+        new_prog[label] = si_stmts(prog.blocks[label])
+
+    return x86.X86Program(new_prog)
 
 ##################################################
 # allocate-registers
