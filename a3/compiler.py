@@ -537,8 +537,6 @@ def prelude_and_conclusion(program: x86.X86Program) -> x86.X86Program:
 
     return x86.X86Program(new_blocks, stack_space=program.stack_space)
 
-    pass
-
 
 ##################################################
 # Compiler definition
