@@ -158,15 +158,18 @@ def rco(prog: Program) -> Program:
             case Var(x):
                 return Var(x)
             case Prim(op, args):
-                # new_args = [rco_exp(a) for a in args]
-                new_args = []
-                for a in args:
-                    new_args.append(rco_exp(a, bindings))
-                    # recursive call to rco_exp should make the argument atomic
-                tmp = gensym('tmp')
-                # bind tmp to prim(op, new_args)
-                bindings[tmp] = Prim(op, new_args)
-                return Var(tmp)
+                # Change here: Let's only make it atomic for cases other than Prim(op, args)
+                # where args are Constant
+                match args:
+                    case [Constant(c1), Constant(c2)]:
+                        return Prim(op, args)
+                    case _:
+                        new_args = []
+                        for a in args:
+                            new_args.append(rco_exp(a, bindings))
+                        tmp = gensym('tmp')
+                        bindings[tmp] = Prim(op, new_args)
+                        return Var(tmp)
 
     def rco_stmt(s: Stmt, bindings: Dict[str, Expr]) -> Stmt:
         match s:
@@ -200,7 +203,7 @@ def rco(prog: Program) -> Program:
 # explicate-control
 ##################################################
 # op    ::= "add" | "sub" | "not" | "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte"
-# Atm   ::= Var(x) | Constant(n)
+# Atm   ::= Var(x) | Constant(n) ||||| Prim(op, [Constant, Constant])
 # Expr  ::= Atm | Prim(op, List[Expr])
 # Stmt  ::= Assign(x, Expr) | Print(Expr) | If(Expr, Stmts, Stmts)
 # Stmts ::= List[Stmt]
@@ -221,44 +224,35 @@ def explicate_control(prog: Program) -> cif.CProgram:
         basic_blocks[new_label] = stmts
         return new_label
 
-    # Graduate Stuff
-    # TODO: explicate_pred
     """
     Input:
         1) The condition expression
         2) The generated statements for the then branch
         3) The generated statements for the else branch
         4) *Left out as it's Global* The dictionary of basic blocks
+    
+    From book:
+
+    match cnd:
+        case Compare(left [op] right):
+            goto_thn = create_block(thn, basic_blocks)
+            goto_els = create_block(els, basic_blocks)
+        case Constant(True):
+            return thn
+        case Constant(False):
+            return els
+        case Unary( Not, op):
+            ...
+        case IfExp(test, body, orelse):
+            ...
+        case Begin(body, result):
+            ...
+        case _:
+            return [If(Compare(cnd [Eq()] [Constant(False)]),
+                    create_block(els, basic_blocks),
+                    create_block(thn, basic_blocks))]
     """
-    def ec_pred(cnd, thn, els) -> List[cif.Stmt]:
-        """
-        From book:
 
-        match cnd:
-            case Compare(left [op] right):
-                goto_thn = create_block(thn, basic_blocks)
-                goto_els = create_block(els, basic_blocks)
-            case Constant(True):
-                return thn
-            case Constant(False):
-                return els
-            case Unary( Not, op):
-                ...
-            case IfExp(test, body, orelse):
-                ...
-            case Begin(body, result):
-                ...
-            case _:
-                return [If(Compare(cnd [Eq()] [Constant(False)]),
-                        create_block(els, basic_blocks),
-                        create_block(thn, basic_blocks))]
-        """
-
-        pass
-
-    # - `ec_atm`
-    # - Constants => cif.Constants
-    # - Var => cif.Var
     def ec_atm(e: Expr) -> cif.Atm:
         match e:
             case Constant(c):
@@ -277,31 +271,52 @@ def explicate_control(prog: Program) -> cif.CProgram:
             case _:
                 return ec_atm(e)
 
-    # - `ec_stmt` takes a statement and a continuation and returns a list of Cif statements
-    # - Assign(x,e) => [cif.Assign(x, ec_expr(e))] + cont
-    # - Print(e) => [cif.Print(ec_expr(e))] + cont
-    # - If (condition, then_stmts, else_stmts) =>
-    # - cond_label = create block for cont
-    # - then_label = create block for ec_stmts(then_stmts, [cif.Goto(cond_label)])
-    # - else_label = create block for ec_stmts(else_stmts, [cif.Goto(cond_label)])
-    # - return[cif(ec_expr(condition), cif.Goto(then_label), cif.Goto(else_label)]
-
     def ec_stmt(s: Stmt, cont: List[cif.Stmt]) -> List[cif.Stmt]:
         match s:
+            # explicate_assign in book (ish)
             case Assign(x, e):
-                new_stmt: List[cif.Stmt] = [cif.Assign(x, ec_expr(e))]
-                return new_stmt + cont
+                match e:
+                    case If(condition, then_stmts, else_stmts):
+                        # Condition may be non-atomic now
+                        # let's handle this elsewhere in ec_pred
+                        if_stmt = ec_pred(condition, then_stmts, else_stmts, cont)
+                        return if_stmt
+                    case _:
+                        new_stmt: List[cif.Stmt] = [cif.Assign(x, ec_expr(e))]
+                        return new_stmt + cont
             case Print(e):
                 new_stmt: List[cif.Stmt] = [cif.Print(ec_expr(e))]
                 return new_stmt + cont
             case If(condition, then_stmts, else_stmts):
-                cont_label = gensym('label')
-                basic_blocks[cont_label] = cont
-                then_label = gensym('label')
-                basic_blocks[then_label] = ec_stmts(then_stmts, [cif.Goto(cont_label)])
-                else_label = gensym('label')
-                basic_blocks[else_label] = ec_stmts(else_stmts, [cif.Goto(cont_label)])
-                return [cif.If(ec_expr(condition), cif.Goto(then_label), cif.Goto(else_label))]
+                ## Previous Work ##
+
+                # cont_label = gensym('label')
+                # basic_blocks[cont_label] = cont
+                # then_label = gensym('label')
+                # basic_blocks[then_label] = ec_stmts(then_stmts, [cif.Goto(cont_label)])
+                # else_label = gensym('label')
+                # basic_blocks[else_label] = ec_stmts(else_stmts, [cif.Goto(cont_label)])
+                # return [cif.If(ec_expr(condition), cif.Goto(then_label), cif.Goto(else_label))]
+
+                # Condition may be non-atomic now
+                # let's handle this elsewhere in ec_pred
+                return ec_pred(condition, then_stmts, else_stmts, cont)
+
+    # Graduate Stuff
+    # TODO: explicate_pred
+    def ec_pred(cond: Expr, then_stmts: List[Stmt], else_stmts: List[Stmt], cont) -> List[cif.Stmt]:
+        # we deal with the possibilities of non-atomic conditions now
+        # Example: cond is allowed through as Prim(op, [Constant, Constant])
+        # basically we need to continue in almost the exact same way just passing this along
+
+        cont_label = gensym('label')
+        basic_blocks[cont_label] = cont
+        then_label = gensym('label')
+        basic_blocks[then_label] = ec_stmts(then_stmts, [cif.Goto(cont_label)])
+        else_label = gensym('label')
+        basic_blocks[else_label] = ec_stmts(else_stmts, [cif.Goto(cont_label)])
+
+        return [cif.If(ec_expr(cond), cif.Goto(then_label), cif.Goto(else_label))]
 
 
     # - `ec_stmts` takes a list of statements and a continuation, returns a list Cif statements
@@ -394,6 +409,12 @@ def select_instructions(prog: cif.CProgram) -> x86.X86Program:
             case cif.If(cif.Var(x), cif.Goto(l1), cif.Goto(l2)):
                 return [x86.NamedInstr("cmpq", [x86.Var(x), x86.Immediate(1)]),
                         x86.JmpIf("e", l1),
+                        x86.Jmp(l2)]
+            # GRAD PART
+            #"eq" | "gt" | "gte" | "lt" | "lte"
+            case cif.If(cif.Prim(op, [cif.Constant(c1), cif.Constant(c2)]), cif.Goto(l1), cif.Goto(l2)):
+                return [x86.NamedInstr("cmpq", [x86.Immediate(c1), x86.Immediate(c2)]),
+                        x86.JmpIf(comparison_codes[op], l1),
                         x86.Jmp(l2)]
             case cif.Goto(l):
                 return [x86.Jmp(l)]
