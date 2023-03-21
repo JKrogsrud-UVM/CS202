@@ -172,6 +172,17 @@ def rco(prog: Program) -> Program:
                 return If(new_condition,
                           new_then_stmts,
                           new_else_stmts)
+            case While(condition, stmts):
+
+                cond_bindings = {}
+                new_cond_exp = rco_exp(condition, cond_bindings)
+                new_cond_assign = []
+                for binding in cond_bindings:
+                    new_cond_assign.append(Assign(binding, cond_bindings[binding]))
+
+                body_stmts = rco_stmts(stmts)
+
+                return While(Begin(new_cond_assign, new_cond_exp), body_stmts)
             case _:
                 raise Exception('rco_stmt', stmt)
 
