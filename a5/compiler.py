@@ -177,6 +177,7 @@ def rco(prog: Program) -> Program:
                 cond_bindings = {}
                 new_cond_exp = rco_exp(condition, cond_bindings)
                 new_cond_assign = []
+
                 for binding in cond_bindings:
                     new_cond_assign.append(Assign(binding, cond_bindings[binding]))
 
@@ -279,6 +280,19 @@ def explicate_control(prog: Program) -> cif.CProgram:
                 return [cif.If(explicate_exp(condition),
                                cif.Goto(e2_label),
                                cif.Goto(e3_label))]
+
+            # We know here that the cond_stmts are all Assignments so new blocks will arise
+            case While(Begin(cond_stmts, cond_exp), body_stmts):
+                cont_label = create_block(cont)
+
+                loop_label = gensym('loop_label')
+
+                body_label = create_block(explicate_stmts(body_stmts, [cif.Goto(loop_label)]))
+
+                basic_blocks[loop_label] = explicate_stmts(cond_stmts, cont) + [cif.If(explicate_exp(cond_exp),
+                                                                cif.Goto(body_label),
+                                                                cif.Goto(cont_label))]
+                return basic_blocks[loop_label]
 
             case _:
                 raise RuntimeError(stmt)
