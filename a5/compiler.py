@@ -122,6 +122,11 @@ def typecheck(program: Program) -> Program:
                     assert t_e == env[x]
                 else:
                     env[x] = t_e
+            case While(condition, stmts):
+                assert tc_exp(condition, env) == bool
+
+                for s in stmts:
+                    tc_stmt(s, env)
             case _:
                 raise Exception('tc_stmt', s)
 
