@@ -42,7 +42,7 @@ def gensym(x):
 ##################################################
 # typecheck
 ##################################################
-# op     ::= "add" | "sub" | "not" | "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte"
+# op     ::= "add" | "sub" | "not" | "mult" | "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte"
 # Expr   ::= Var(x) | Constant(n) | Prim(op, List[Expr])
 # Stmt   ::= Assign(x, Expr) | Print(Expr) | If(Expr, Stmts, Stmts) | While(Expr, Stmts)
 # Stmts  ::= List[Stmt]
@@ -58,7 +58,80 @@ def typecheck(program: Program) -> Program:
     :return: The program, if it is well-typed
     """
 
-    pass
+    prim_arg_types = {
+        'add': [int, int],
+        'sub': [int, int],
+        'mult': [int, int],
+        'not': [bool],
+        'or': [bool, bool],
+        'and': [bool, bool],
+        'gt': [int, int],
+        'gte': [int, int],
+        'lt': [int, int],
+        'lte': [int, int],
+    }
+
+    prim_output_types = {
+        'add': int,
+        'sub': int,
+        'mult': int,
+        'not': bool,
+        'or': bool,
+        'and': bool,
+        'gt': bool,
+        'gte': bool,
+        'lt': bool,
+        'lte': bool,
+    }
+
+    def tc_exp(e: Expr, env: TEnv) -> type:
+        match e:
+            case Var(x):
+                return env[x]
+            case Constant(i):
+                if isinstance(i, bool):
+                    return bool
+                elif isinstance(i, int):
+                    return int
+                else:
+                    raise Exception('tc_exp', e)
+            case Prim('eq', [e1, e2]):
+                assert tc_exp(e1, env) == tc_exp(e2, env)
+                return bool
+            case Prim(op, args):
+                arg_types = [tc_exp(a, env) for a in args]
+                assert arg_types == prim_arg_types[op]
+                return prim_output_types[op]
+            case _:
+                raise Exception('tc_exp', e)
+
+    def tc_stmt(s: Stmt, env: TEnv):
+        match s:
+            case If(condition, then_stmts, else_stmts):
+                assert tc_exp(condition, env) == bool
+
+                for s in then_stmts:
+                    tc_stmt(s, env)
+                for s in else_stmts:
+                    tc_stmt(s, env)
+            case Print(e):
+                tc_exp(e, env)
+            case Assign(x, e):
+                t_e = tc_exp(e, env)
+                if x in env:
+                    assert t_e == env[x]
+                else:
+                    env[x] = t_e
+            case _:
+                raise Exception('tc_stmt', s)
+
+    def tc_stmts(stmts: List[Stmt], env: TEnv):
+        for s in stmts:
+            tc_stmt(s, env)
+
+    env = {}
+    tc_stmts(program.stmts, env)
+    return program
 
 
 ##################################################
