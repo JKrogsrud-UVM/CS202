@@ -284,15 +284,12 @@ def explicate_control(prog: Program) -> cif.CProgram:
             # We know here that the cond_stmts are all Assignments so new blocks will arise
             case While(Begin(cond_stmts, cond_exp), body_stmts):
                 cont_label = create_block(cont)
-
                 loop_label = gensym('loop_label')
-
                 body_label = create_block(explicate_stmts(body_stmts, [cif.Goto(loop_label)]))
-
-                basic_blocks[loop_label] = explicate_stmts(cond_stmts, cont) + [cif.If(explicate_exp(cond_exp),
+                basic_blocks[loop_label] = explicate_stmts(cond_stmts, [cif.If(explicate_exp(cond_exp),
                                                                 cif.Goto(body_label),
-                                                                cif.Goto(cont_label))]
-                return basic_blocks[loop_label]
+                                                                cif.Goto(cont_label))])
+                return [cif.Goto(loop_label)]
 
             case _:
                 raise RuntimeError(stmt)
@@ -413,9 +410,15 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
 
     all_vars: Set[x86.Var] = set()
     live_before_sets = {'conclusion': set()}
+
+    blocks = program.blocks
+
+    for label in blocks:
+        live_before_sets[label] = set()
+
     live_after_sets = {}
     homes: Dict[x86.Var, x86.Arg] = {}
-    blocks = program.blocks
+
 
     # --------------------------------------------------
     # utilities
@@ -441,11 +444,6 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
             case x86.NamedInstr(i, [e1, e2]) if i in ['addq', 'cmpq', 'imulq', 'subq', 'andq', 'orq', 'xorq']:
                 return vars_arg(e1).union(vars_arg(e2))
             case x86.Jmp(label) | x86.JmpIf(_, label):
-                # if we don't know the live-before set for the destination,
-                # calculate it first
-                if label not in live_before_sets:
-                    ul_block(label)
-
                 # the variables that might be read after this instruction
                 # are the live-before variables of the destination block
                 return live_before_sets[label]
@@ -483,6 +481,16 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
 
         live_before_sets[label] = current_live_after
         live_after_sets[label] = list(reversed(block_live_after_sets))
+
+    def ul_fixedpoint(labels: List[str]):
+        change_occured = True
+        while change_occured:
+            live_after_copy = live_after_sets.copy()
+            for label in labels:
+                ul_block(label)
+            if live_after_sets == live_after_copy:
+                change_occured = False
+
 
     # --------------------------------------------------
     # interference graph
@@ -569,7 +577,9 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     # --------------------------------------------------
 
     # Step 1: Perform liveness analysis
-    ul_block('start')
+    #TODO:
+    # ul_block('start')
+    ul_fixedpoint(list(blocks.keys()))
     log_ast('live-after sets', live_after_sets)
 
     # Step 2: Build the interference graph
