@@ -577,8 +577,6 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     # --------------------------------------------------
 
     # Step 1: Perform liveness analysis
-    #TODO:
-    # ul_block('start')
     ul_fixedpoint(list(blocks.keys()))
     log_ast('live-after sets', live_after_sets)
 
