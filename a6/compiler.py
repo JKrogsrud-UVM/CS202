@@ -104,6 +104,54 @@ def expose_alloc(prog: Program) -> Program:
     :return: An Ltup program, without Tuple constructors
     """
 
+    # every tuple construction wil be a statement of the form:
+    # x=tuple(args), true bc of RCO
+
+    def ea_stmt(s) -> List[Stmt]:
+        match s:
+            case Assign(x, Prim('tuple', args)):
+                # TODO: Fill in
+                    # # 1. call collect if needed
+                    # if free_ptr + 32 < fromspace_end:
+                    #     pass # don't need to call collector, enough space
+                    # else:
+                    #     _ = collect(32)
+                    #
+                """
+                COPY FROM ONLINE COMPILER
+                """
+                all_stmts = []
+                bytes_needed = len(args) * 8 + 8
+                tmp1_var = gensym('tmp')
+                tmp1 = Assign(tmp1_var, Prim("add", [Var("free_ptr"), Constant(bytes_needed)]))
+                tmp2 = Assign('tmp_3', ...)
+                collect_if = If(Var("tmp_3"), [], [Assign("_"), Prim('collect', Constant(bytes_needed))])
+                all_stmts += [tmp1, tmp2, collect_if]
+                # tmp2
+                #collect_if
+
+                    # # 2. allocate
+                    # x = allocate(32, tag)
+                    #TODO: Fill in
+
+                    # # 3. set contents
+                    # _ = tuple_set(x, 0 , 1)
+                    # _ = tuple_set(x, 1 , 2)
+                    # _ = tuple_set(x, 2 , 3)
+                for i, a in enumerate(args):
+                    all_stmts.append(Assign('_', Prim('tuple_set', [Var(x), Constant(i), a])))
+                pass
+            case While(Begin(c_stmts, c_expr), body_stmts):
+                return [While(Begin(ea_stmts(c_stmts), c_expr), ea_stmts(body_stmts))]
+            case If(e, s1, s2):
+                return [If(e,ea_stmts(s1))]
+            case _:
+                return s
+        pass
+    def ea_stmts(stmts: List[Stmt]) ->:
+        # TODO
+        pass
+
     pass
 
 
