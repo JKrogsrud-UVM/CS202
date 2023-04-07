@@ -243,6 +243,31 @@ def expose_alloc(prog: Program) -> Program:
     # every tuple construction wil be a statement of the form:
     # x=tuple(args), true bc of RCO
 
+    def mk_tag(ts):
+
+        tag = 0
+
+        # Construct pointer mask
+
+        for t in reversed(ts):
+            tag = tag << 1
+            if isinstance(t, tuple):
+                tag = tag + 1
+            else:
+                tag = tag + 0
+
+        # Construct length
+
+        tag = tag << 6
+        tag = tag + len(z_type)
+
+        # Add the forwarding pointer indicator
+
+        tag = tag << 1
+        tag = tag + 1
+
+        return tag
+
     def ea_stmt(s) -> List[Stmt]:
         match s:
             case Assign(x, Prim('tuple', args)):
@@ -256,10 +281,8 @@ def expose_alloc(prog: Program) -> Program:
                 collect_if = If(Var("tmp_3"), [], [Assign("_", Prim('collect', [Constant(bytes_needed)]))])
                 all_stmts += [tmp1, tmp2, collect_if]
 
-                # # 2. allocate
-                # x = allocate(32, tag)
-                # TODO: tag generation to come
-
+                # Step 2: Make tag
+                tag = mk_tag(tuple_var_types[x])
 
                 # Set Contents
                 for i, a in enumerate(args):
