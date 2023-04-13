@@ -55,7 +55,6 @@ def gensym(x):
 # Stmts  ::= List[Stmt]
 # LFun   ::= Program(Stmts)
 
-# There are changes
 @dataclass
 class Callable:
     args: List[type]
@@ -100,6 +99,9 @@ def typecheck(program: Program) -> Program:
     def tc_exp(e: Expr, env: TEnv) -> type:
         match e:
             case Call(func, args):
+                # Treat this like Prim
+                # assert tc_exp(func, env) == Callable
+                func_callable = env[func]
                 pass
             case Var(x):
                 if x in global_values:
@@ -136,10 +138,20 @@ def typecheck(program: Program) -> Program:
 
     def tc_stmt(s: Stmt, env: TEnv):
         match s:
-            case FunctionDef:
-                pass
-            case Return:
-                pass
+            # FunctionDef(str, List[Tuple[str, type]], List[Stmt], type)
+            case FunctionDef(name, params, body_stmts, return_type):
+                # Callable(List[type], type)
+                param_types = [tup[1] for tup in params]
+                # QUESTION HERE
+                env[name] = Callable(param_types, return_type)
+                new_env = env.copy()
+                for param in params:
+                    tc_exp(param, new_env)
+                new_env['ret_val'] = return_type
+                tc_stmts(body_stmts, new_env)
+                function_names.add(name)
+            case Return(e):
+                assert tc_exp(e, env) == env['ret_val']
             case While(condition, body_stmts):
                 assert tc_exp(condition, env) == bool
                 tc_stmts(body_stmts, env)
@@ -190,7 +202,72 @@ def rco(prog: Program) -> Program:
     :return: An Ltup program with atomic operator arguments.
     """
 
-    pass
+    def rco_stmt(stmt: Stmt, bindings: Dict[str, Expr]) -> Stmt:
+        match stmt:
+            case FunctionDef(name, params, body_stmts, return_type):
+                #TODO: Incomplete
+                rco_stmts(body_stmts)
+            case Return(e):
+                return Return(rco_exp(e, bindings))
+            case Assign(x, e1):
+                new_e1 = rco_exp(e1, bindings)
+                return Assign(x, new_e1)
+            case Print(e1):
+                new_e1 = rco_exp(e1, bindings)
+                return Print(new_e1)
+            case While(condition, body_stmts):
+                condition_bindings = {}
+                condition_exp = rco_exp(condition, condition_bindings)
+                condition_stmts = [Assign(x, e) for x, e in condition_bindings.items()]
+                new_condition = Begin(condition_stmts, condition_exp)
+
+                new_body_stmts = rco_stmts(body_stmts)
+                return While(new_condition, new_body_stmts)
+
+            case If(condition, then_stmts, else_stmts):
+                new_condition = rco_exp(condition, bindings)
+                new_then_stmts = rco_stmts(then_stmts)
+                new_else_stmts = rco_stmts(else_stmts)
+
+                return If(new_condition,
+                          new_then_stmts,
+                          new_else_stmts)
+            case _:
+                raise Exception('rco_stmt', stmt)
+
+    def rco_stmts(stmts: List[Stmt]) -> List[Stmt]:
+        new_stmts = []
+
+        for stmt in stmts:
+            bindings = {}
+            # (1) compile the statement
+            new_stmt = rco_stmt(stmt, bindings)
+            # (2) add the new bindings created by rco_exp
+            new_stmts.extend([Assign(x, e) for x, e in bindings.items()])
+            # (3) add the compiled statement itself
+            new_stmts.append(new_stmt)
+
+        return new_stmts
+
+    def rco_exp(e: Expr, bindings: Dict[str, Expr]) -> Expr:
+        match e:
+            case Call(func, params):
+                pass
+            case Var(x):
+                #TODO: Update this
+                return Var(x)
+            case Constant(i):
+                return Constant(i)
+            case Prim(op, args):
+                new_args = [rco_exp(e, bindings) for e in args]
+                new_e = Prim(op, new_args)
+                new_v = gensym('tmp')
+                bindings[new_v] = new_e
+                return Var(new_v)
+            case _:
+                raise Exception('rco_exp', e)
+
+    return Program(rco_stmts(prog.stmts))
 
 
 ##################################################
