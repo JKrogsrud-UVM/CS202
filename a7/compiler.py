@@ -55,6 +55,7 @@ def gensym(x):
 # Stmts  ::= List[Stmt]
 # LFun   ::= Program(Stmts)
 
+# There are changes
 @dataclass
 class Callable:
     args: List[type]
@@ -70,8 +71,103 @@ def typecheck(program: Program) -> Program:
     :param program: The Ltup program to typecheck
     :return: The program, if it is well-typed
     """
+    prim_arg_types = {
+        'add': [int, int],
+        'sub': [int, int],
+        'mult': [int, int],
+        'not': [bool],
+        'or': [bool, bool],
+        'and': [bool, bool],
+        'gt': [int, int],
+        'gte': [int, int],
+        'lt': [int, int],
+        'lte': [int, int],
+    }
 
-    pass
+    prim_output_types = {
+        'add': int,
+        'sub': int,
+        'mult': int,
+        'not': bool,
+        'or': bool,
+        'and': bool,
+        'gt': bool,
+        'gte': bool,
+        'lt': bool,
+        'lte': bool,
+    }
+
+    def tc_exp(e: Expr, env: TEnv) -> type:
+        match e:
+            case Call(func, args):
+                pass
+            case Var(x):
+                if x in global_values:
+                    return int
+                else:
+                    return env[x]
+            case Constant(i):
+                if isinstance(i, bool):
+                    return bool
+                elif isinstance(i, int):
+                    return int
+                else:
+                    raise Exception('tc_exp', e)
+            case Prim('tuple', args):
+                arg_types = [tc_exp(a, env) for a in args]
+                t = tuple(arg_types)
+                return t
+            case Prim('subscript', [e1, Constant(i)]):
+                t = tc_exp(e1, env)
+                assert isinstance(t, tuple)
+                return t[i]
+            case Prim('eq', [e1, e2]):
+                assert tc_exp(e1, env) == tc_exp(e2, env)
+                return bool
+            case Prim(op, args):
+                arg_types = [tc_exp(a, env) for a in args]
+                assert arg_types == prim_arg_types[op]
+                return prim_output_types[op]
+            case Begin(stmts, e):
+                tc_stmts(stmts, env)
+                return tc_exp(e, env)
+            case _:
+                raise Exception('tc_exp', e)
+
+    def tc_stmt(s: Stmt, env: TEnv):
+        match s:
+            case FunctionDef:
+                pass
+            case Return:
+                pass
+            case While(condition, body_stmts):
+                assert tc_exp(condition, env) == bool
+                tc_stmts(body_stmts, env)
+            case If(condition, then_stmts, else_stmts):
+                assert tc_exp(condition, env) == bool
+                tc_stmts(then_stmts, env)
+                tc_stmts(else_stmts, env)
+            case Print(e):
+                tc_exp(e, env)
+            case Assign(x, e):
+                t_e = tc_exp(e, env)
+                if x in env:
+                    assert t_e == env[x]
+                else:
+                    env[x] = t_e
+            case _:
+                raise Exception('tc_stmt', s)
+
+    def tc_stmts(stmts: List[Stmt], env: TEnv):
+        for s in stmts:
+            tc_stmt(s, env)
+
+    env = {}
+    tc_stmts(program.stmts, env)
+    for x in env:
+        if isinstance(env[x], tuple):
+            tuple_var_types[x] = env[x]
+    return program
 
 
 ##################################################
@@ -117,6 +213,11 @@ def expose_alloc(prog: Program) -> Program:
     :return: An Ltup program, without Tuple constructors
     """
 
+    """
+    ea_stmt:
+        case FunctionDef:
+            pass
+    """
     pass
 
 
