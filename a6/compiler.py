@@ -121,18 +121,22 @@ def typecheck(program: Program) -> Program:
                 arg_types = [tc_exp(a, env) for a in args]
                 assert arg_types == prim_arg_types[op]
                 return prim_output_types[op]
+            case Begin(stmts, expr):
+                tc_stmts(stmts, env)
+                tc_exp(expr, env)
+                return bool
             case _:
                 raise Exception('tc_exp', e)
 
     def tc_stmt(s: Stmt, env: TEnv):
         match s:
+            case While(condition, body_stmts):
+                assert tc_exp(condition, env) == bool
+                tc_stmts(body_stmts, env)
             case If(condition, then_stmts, else_stmts):
                 assert tc_exp(condition, env) == bool
-
-                for s in then_stmts:
-                    tc_stmt(s, env)
-                for s in else_stmts:
-                    tc_stmt(s, env)
+                tc_stmts(then_stmts, env)
+                tc_stmts(else_stmts, env)
             case Print(e):
                 tc_exp(e, env)
             case Assign(x, e):
@@ -176,9 +180,19 @@ def rco(prog: Program) -> Program:
             case Assign(x, e1):
                 new_e1 = rco_exp(e1, bindings)
                 return Assign(x, new_e1)
+
             case Print(e1):
                 new_e1 = rco_exp(e1, bindings)
                 return Print(new_e1)
+
+            case While(condition, body_stmts):
+                condition_bindings = {}
+                condition_exp = rco_exp(condition, condition_bindings)
+                condition_stmts = [Assign(x, e) for x, e in condition_bindings.items()]
+                new_condition = Begin(condition_stmts, condition_exp)
+                new_body_stmts = rco_stmts(body_stmts)
+                return While(new_condition, new_body_stmts)
+
             case If(condition, then_stmts, else_stmts):
                 new_condition = rco_exp(condition, bindings)
                 new_then_stmts = rco_stmts(then_stmts)
@@ -259,7 +273,7 @@ def expose_alloc(prog: Program) -> Program:
         # Construct length
 
         tag = tag << 6
-        tag = tag + len(z_type)
+        tag = tag + len(ts)
 
         # Add the forwarding pointer indicator
 
@@ -271,22 +285,25 @@ def expose_alloc(prog: Program) -> Program:
     def ea_stmt(s) -> List[Stmt]:
         match s:
             case Assign(x, Prim('tuple', args)):
-                # Step 1:
+                # Step 1: Call Collect if needed
                 all_stmts = []
                 bytes_needed = len(args) * 8 + 8
                 tmp1_var = gensym('tmp')
                 tmp1 = Assign(tmp1_var, Prim("add", [Var("free_ptr"), Constant(bytes_needed)]))
                 tmp2_var = gensym('tmp')
-                tmp2 = Assign(tmp2_var, Prim("lt", [tmp2_var, Var('fromspace_end')]))
-                collect_if = If(Var("tmp_3"), [], [Assign("_", Prim('collect', [Constant(bytes_needed)]))])
+                tmp2 = Assign(tmp2_var, Prim("lt", [Var(tmp1_var), Var('fromspace_end')]))
+                collect_if = If(Var(tmp2_var), [], [Assign("_", Prim('collect', [Constant(bytes_needed)]))])
                 all_stmts += [tmp1, tmp2, collect_if]
 
-                # Step 2: Make tag
+                # Step 2: Make tag and allocate
                 tag = mk_tag(tuple_var_types[x])
+                alloc = Assign(x, Prim("allocate", [Constant(bytes_needed), Constant(tag)]))
+                all_stmts.append(alloc)
 
-                # Set Contents
+                # Step 3: Set Contents
                 for i, a in enumerate(args):
                     all_stmts.append(Assign('_', Prim('tuple_set', [Var(x), Constant(i), a])))
+
                 return all_stmts
 
             case While(Begin(c_stmts, c_expr), body_stmts):
@@ -294,15 +311,17 @@ def expose_alloc(prog: Program) -> Program:
             case If(e, s1, s2):
                 return [If(e, ea_stmts(s1), ea_stmts(s2))]
             case _:
-                return s
-        pass
-    def ea_stmts(stmts: List[Stmt]):
-        program = []
-        for s in stmts:
-            program.extend(ea_stmt(s))
-        return program
+                return [s]
 
-    return Program(ea_stmts(prog.stmts))
+    def ea_stmts(stmts: List[Stmt]):
+        new_list = []
+        for s in stmts:
+            new_list.extend(ea_stmt(s))
+        return new_list
+
+    new_prog = ea_stmts(prog.stmts)
+
+    return Program(new_prog)
 
 
 ##################################################
@@ -360,6 +379,15 @@ def explicate_control(prog: Program) -> ctup.CProgram:
                 new_exp = explicate_atm(exp)
                 new_stmt: List[ctup.Stmt] = [ctup.Print(new_exp)]
                 return new_stmt + cont
+            case While(Begin(condition_stmts, condition_exp), body_stmts):
+                cont_label = create_block(cont)
+                test_label = gensym('loop_label')
+                body_label = create_block(explicate_stmts(body_stmts, [ctup.Goto(test_label)]))
+                test_stmts = [ctup.If(explicate_exp(condition_exp),
+                                     ctup.Goto(body_label),
+                                     ctup.Goto(cont_label))]
+                basic_blocks[test_label] = explicate_stmts(condition_stmts, test_stmts)
+                return [ctup.Goto(test_label)]
             case If(condition, then_stmts, else_stmts):
                 cont_label = create_block(cont)
                 e2_label = create_block(explicate_stmts(then_stmts, [ctup.Goto(cont_label)]))
@@ -407,7 +435,10 @@ def select_instructions(prog: ctup.CProgram) -> x86.X86Program:
             case ctup.Constant(i):
                 return x86.Immediate(int(i))
             case ctup.Var(x):
-                return x86.Var(x)
+                if x in global_values:
+                    return x86.GlobalVal(x)
+                else:
+                    return x86.Var(x)
             case _:
                 raise Exception('si_atm', a)
 
@@ -425,6 +456,20 @@ def select_instructions(prog: ctup.CProgram) -> x86.X86Program:
 
     def si_stmt(stmt: ctup.Stmt) -> List[x86.Instr]:
         match stmt:
+            case ctup.Assign(x, ctup.Prim('collect', [atm])):
+                # It's in the form Assign('_', Prim('collect', [Constant(value)])
+                # Constant(value) is our Immediate
+                return [x86.NamedInstr('movq', [x86.Reg('r15'), x86.Reg('rdi')]),
+                        x86.NamedInstr('movq', [si_atm(atm), x86.Reg('rsi')]),
+                        x86.Callq('collect')]
+            case ctup.Assign(x, ctup.Prim('subscript', [var, ctup.Constant(loc)])):
+                offset = (loc + 1) * 8
+                return [x86.NamedInstr('movq', [si_atm(var), x86.Reg('r11')]),
+                        x86.NamedInstr('movq', [x86.Deref('r11', offset), x86.Var(x)])]
+            case ctup.Assign('_', ctup.Prim('tuple_set', [var, ctup.Constant(loc), value])):
+                offset = (loc + 1) * 8
+                return [x86.NamedInstr('movq', [si_atm(var), x86.Reg('r11')]),
+                        x86.NamedInstr('movq', [si_atm(value), x86.Deref('r11', offset)])]
             case ctup.Assign(x, ctup.Prim(op, [atm1, atm2])):
                 if op in binop_instrs:
                     return [x86.NamedInstr('movq', [si_atm(atm1), x86.Reg('rax')]),
@@ -434,22 +479,34 @@ def select_instructions(prog: ctup.CProgram) -> x86.X86Program:
                     return [x86.NamedInstr('cmpq', [si_atm(atm2), si_atm(atm1)]),
                             x86.Set(op_cc[op], x86.ByteReg('al')),
                             x86.NamedInstr('movzbq', [x86.ByteReg('al'), x86.Var(x)])]
-
+                elif op == 'allocate':
+                    # atm1 = size in bytes of tuple, atm2 is the tag
+                    #
+                    return [x86.NamedInstr('movq', [si_atm(ctup.Var('free_ptr')), x86.Var(x)]),
+                            x86.NamedInstr('addq', [si_atm(atm1), si_atm(ctup.Var('free_ptr'))]),
+                            x86.NamedInstr('movq', [x86.Var(x), x86.Reg('r11')]),
+                            x86.NamedInstr('movq', [si_atm(atm2), x86.Deref('r11', 0)])]
                 else:
                     raise Exception('si_stmt failed op', op)
+
             case ctup.Assign(x, ctup.Prim('not', [atm1])):
                 return [x86.NamedInstr('movq', [si_atm(atm1), x86.Var(x)]),
                         x86.NamedInstr('xorq', [x86.Immediate(1), x86.Var(x)])]
+
             case ctup.Assign(x, atm1):
                 return [x86.NamedInstr('movq', [si_atm(atm1), x86.Var(x)])]
+
             case ctup.Print(atm1):
                 return [x86.NamedInstr('movq', [si_atm(atm1), x86.Reg('rdi')]),
                         x86.Callq('print_int')]
+
             case ctup.Return(atm1):
                 return [x86.NamedInstr('movq', [si_atm(atm1), x86.Reg('rax')]),
                         x86.Jmp('conclusion')]
+
             case ctup.Goto(label):
                 return [x86.Jmp(label)]
+
             case ctup.If(a, ctup.Goto(then_label), ctup.Goto(else_label)):
                 return [x86.NamedInstr('cmpq', [si_atm(a), x86.Immediate(1)]),
                         x86.JmpIf('e', then_label),
@@ -485,11 +542,14 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     locations.
     """
 
+    blocks = program.blocks
     all_vars: Set[x86.Var] = set()
     live_before_sets = {'conclusion': set()}
+    for label in blocks:
+        live_before_sets[label] = set()
+
     live_after_sets = {}
     homes: Dict[x86.Var, x86.Arg] = {}
-    blocks = program.blocks
 
     # --------------------------------------------------
     # utilities
@@ -505,6 +565,10 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
             case x86.Var(x):
                 all_vars.add(x86.Var(x))
                 return {x86.Var(x)}
+            case x86.Deref(reg, offset):
+                return set()
+            case x86.GlobalVal(val):
+                return set()
             case _:
                 raise Exception('ul_arg', a)
 
@@ -512,14 +576,9 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
         match i:
             case x86.NamedInstr(i, [e1, e2]) if i in ['movq', 'movzbq']:
                 return vars_arg(e1)
-            case x86.NamedInstr(i, [e1, e2]) if i in ['addq', 'cmpq', 'imulq', 'subq', 'andq', 'orq', 'xorq']:
+            case x86.NamedInstr(i, [e1, e2]) if i in ['addq', 'subq', 'imulq', 'cmpq', 'andq', 'orq', 'xorq']:
                 return vars_arg(e1).union(vars_arg(e2))
             case x86.Jmp(label) | x86.JmpIf(_, label):
-                # if we don't know the live-before set for the destination,
-                # calculate it first
-                if label not in live_before_sets:
-                    ul_block(label)
-
                 # the variables that might be read after this instruction
                 # are the live-before variables of the destination block
                 return live_before_sets[label]
@@ -531,9 +590,9 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
 
     def writes_of(i: x86.Instr) -> Set[x86.Var]:
         match i:
-            case x86.NamedInstr(i, [e1, e2]) \
+            case x86.NamedInstr(i, [e1, e2]):
                 if i in ['movq', 'movzbq', 'addq', 'subq', 'imulq', 'cmpq', 'andq', 'orq', 'xorq']:
-                return vars_arg(e2)
+                    return vars_arg(e2)
             case _:
                 if isinstance(i, (x86.Jmp, x86.JmpIf, x86.Callq, x86.Set)):
                     return set()
@@ -558,6 +617,18 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
         live_before_sets[label] = current_live_after
         live_after_sets[label] = list(reversed(block_live_after_sets))
 
+    def ul_fixpoint(labels: List[str]):
+        fixpoint_reached = False
+
+        while not fixpoint_reached:
+            old_live_befores = live_before_sets.copy()
+
+            for label in labels:
+                ul_block(label)
+
+            if old_live_befores == live_before_sets:
+                fixpoint_reached = True
+
     # --------------------------------------------------
     # interference graph
     # --------------------------------------------------
@@ -568,7 +639,14 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
 
     def bi_block(instrs: List[x86.Instr], live_afters: List[Set[x86.Var]], graph: InterferenceGraph):
         for instr, live_after in zip(instrs, live_afters):
-            bi_instr(instr, live_after, graph)
+            match instr:
+                case x86.Callq('collect'):
+                    # Add an edge between every tuple-valued variable in live-after and every register
+                    for var in live_after:
+                        if var in tuple_var_types.keys():
+                            print(var)
+                case _:
+                    bi_instr(instr, live_after, graph)
 
     # --------------------------------------------------
     # graph coloring
@@ -620,6 +698,10 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
                 return a
             case x86.Var(x):
                 return homes[x86.Var(x)]
+            case x86.GlobalVal(val):
+                return a
+            case x86.Deref(reg, offset):
+                return a
             case _:
                 raise Exception('ah_arg', a)
 
@@ -643,7 +725,8 @@ def allocate_registers(program: x86.X86Program) -> x86.X86Program:
     # --------------------------------------------------
 
     # Step 1: Perform liveness analysis
-    ul_block('start')
+    all_labels = list(blocks.keys())
+    ul_fixpoint(all_labels)
     log_ast('live-after sets', live_after_sets)
 
     # Step 2: Build the interference graph
@@ -705,7 +788,50 @@ def patch_instructions(program: x86.X86Program) -> x86.X86Program:
     :return: A patched x86 program.
     """
 
-    pass
+    ## new to this pass: GlobalVal(x) < -- these count as memory access
+    ## PI needs to make sure that there are no instructions where both args are memory addresses
+
+    ## Change: add cases to ensure both args are not memory addresses INCLUDING GlobalVal
+
+    def pi_instr(e: x86.Instr) -> List[x86.Instr]:
+        match e:
+            # Change these as Deref works just like GlobalVal for us
+            case x86.NamedInstr(i, [a, b]):
+                if i == 'cmpq':
+                    return [x86.NamedInstr('movq', [b, x86.Reg('rax')]),
+                            x86.NamedInstr('cmpq', [a, x86.Reg('rax')])]
+                elif isinstance(a, (x86.GlobalVal, x86.Deref)) and isinstance(b, (x86.GlobalVal, x86.Deref)):
+                    return [x86.NamedInstr('movq', [a, x86.Reg('rax')]),
+                            x86.NamedInstr(i, [x86.Reg('rax'), b])]
+                else:
+                    return [e]
+
+            # case x86.NamedInstr(i, [x86.Deref(r1, o1), x86.Deref(r2, o2)]):
+            #     return [x86.NamedInstr('movq', [x86.Deref(r1, o1), x86.Reg('rax')]),
+            #             x86.NamedInstr(i, [x86.Reg('rax'), x86.Deref(r2, o2)])]
+
+            # case x86.NamedInstr('movzbq', [x86.Deref(r1, o1), x86.Deref(r2, o2)]):
+            #     return [x86.NamedInstr('movzbq', [x86.Deref(r1, o1), x86.Reg('rax')]),
+            #             x86.NamedInstr('movq', [x86.Reg('rax'), x86.Deref(r2, o2)])]
+
+            # case x86.NamedInstr('cmpq', [a1, x86.Immediate(i)]):
+            #     return [x86.NamedInstr('movq', [x86.Immediate(i), x86.Reg('rax')]),
+            #             x86.NamedInstr('cmpq', [a1, x86.Reg('rax')])]
+
+            case _:
+                if isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.JmpIf, x86.NamedInstr, x86.Set)):
+                    return [e]
+                else:
+                    raise Exception('pi_instr', e)
+
+    def pi_block(instrs: List[x86.Instr]) -> List[x86.Instr]:
+        new_instrs = [pi_instr(i) for i in instrs]
+        flattened = [val for sublist in new_instrs for val in sublist]
+        return flattened
+
+    blocks = program.blocks
+    new_blocks = {label: pi_block(block) for label, block in blocks.items()}
+    return x86.X86Program(new_blocks, stack_space=program.stack_space)
 
 
 ##################################################
@@ -726,7 +852,33 @@ def prelude_and_conclusion(program: x86.X86Program) -> x86.X86Program:
     :return: An x86 program, with prelude and conclusion.
     """
 
-    pass
+    prelude = [x86.NamedInstr('pushq', [x86.Reg('rbp')]),
+               x86.NamedInstr('movq', [x86.Reg('rsp'), x86.Reg('rbp')]),
+               x86.NamedInstr('subq', [x86.Immediate(program.stack_space),
+                                       x86.Reg('rsp')]),
+               # Set up heap
+               x86.NamedInstr('movq', [x86.Immediate(constants.root_stack_size), x86.Reg('rdi')]),
+               x86.NamedInstr('movq', [x86.Immediate(constants.heap_size), x86.Reg('rsi')]),
+               x86.Callq('initialize'),
+               # Initialize Rootstack
+               x86.NamedInstr('movq', [x86.GlobalVal('rootstack_begin'), x86.Reg('r15')])]
+
+    # For every slot on rootstack, repeat:
+    # for slot in rootstack:
+    # prelude.extend([x86.NamedInstr('movq', [x86.Immediate(0), x86.Deref('r15', 0)]),
+    #                 x86.NamedInstr('addq', [x86.Immediate(8), x86.Reg('r15')])])
+
+    prelude.extend([x86.Jmp('start')])
+
+    conclusion = [x86.NamedInstr('addq', [x86.Immediate(program.stack_space),
+                                          x86.Reg('rsp')]),
+                  x86.NamedInstr('popq', [x86.Reg('rbp')]),
+                  x86.Retq()]
+
+    new_blocks = program.blocks.copy()
+    new_blocks['main'] = prelude
+    new_blocks['conclusion'] = conclusion
+    return x86.X86Program(new_blocks, stack_space=program.stack_space)
 
 
 ##################################################

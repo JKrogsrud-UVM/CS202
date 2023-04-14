@@ -141,7 +141,7 @@ def typecheck(program: Program) -> Program:
             # FunctionDef(str, List[Tuple[str, type]], List[Stmt], type)
             case FunctionDef(name, params, body_stmts, return_type):
                 # Callable(List[type], type)
-                param_types = [tup[1] for tup in params]
+                param_types: List[type] = [tup[1] for tup in params]
                 # QUESTION HERE
                 env[name] = Callable(param_types, return_type)
                 new_env = env.copy()
@@ -317,6 +317,11 @@ def explicate_control(prog: Program) -> cfun.CProgram:
     :param prog: An Ltup Expression
     :return: A Ctup Program
     """
+    # Note:
+    # Cfun::= CProgram(List[CFunctionDef])
+    # Output if very different
+
+
 
     # the basic blocks of the program
     basic_blocks: Dict[str, List[cfun.Stmt]] = {}
