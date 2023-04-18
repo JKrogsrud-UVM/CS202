@@ -99,7 +99,7 @@ def typecheck(program: Program) -> Program:
 
     def tc_exp(e: Expr, env: TEnv) -> type:
         match e:
-            case Call(func, args):
+            case Call(Var(func), args):
                 # args is List[Expr]
                 """
                 1. Assume we have already type-checked the definition of f
@@ -108,11 +108,14 @@ def typecheck(program: Program) -> Program:
                    arguments in the function def (t1, .. tk) --- (lots of assertions)
                 4. Return the type t
                 """
-                tc_exp(func, env)
+                # Call(Expr, List[Expr])
+                # How to typecheck part 2 here?
+                tc_exp(Var(func), env)
                 func_callable = env[func]
                 for arg_no in range(len(args)):
                     assert tc_exp(args[arg_no], env) == func_callable.args[arg_no]
                 return env[func].output_type
+
             case Var(x):
                 if x in global_values:
                     return int
@@ -150,16 +153,25 @@ def typecheck(program: Program) -> Program:
         match s:
             # FunctionDef(str, List[Tuple[str, type]], List[Stmt], type)
             case FunctionDef(name, params, body_stmts, return_type):
-                # Callable(List[type], type)
+
+                # Make a list of types of the params for function signature
                 param_types: List[type] = [tup[1] for tup in params]
+                # Set the function name with Callable type in environment
                 env[name] = Callable(param_types, return_type)
+
+                # Copy env
                 new_env = env.copy()
+
+                # Add each param to new environment
                 for param in params:
                     new_env[param[0]] = param[1]
+
                 new_env['ret_val'] = return_type
                 tc_stmts(body_stmts, new_env)
+
                 function_names.add(name)
 
+            # Can be assumed will happen after function def?
             case Return(e):
                 assert tc_exp(e, env) == env['ret_val']
 
@@ -264,24 +276,37 @@ def rco(prog: Program) -> Program:
 
     def rco_exp(e: Expr, bindings: Dict[str, Expr]) -> Expr:
         match e:
-            case Call(func, params):
+            case Call(Var(func), params):
+
                 new_params = [rco_exp(p, bindings) for p in params]
-                new_expr = Call(rco_exp(func, bindings), new_params)
+                func_var = rco_exp(Var(func), bindings)
+
+                new_e = Call(func_var, new_params)
                 new_v = gensym('tmp')
-                bindings[new_v] = new_expr
+                bindings[new_v] = new_e
+
                 return Var(new_v)
+
             case Var(x):
+
                 # If x is a function make a tmp for it and return that
                 if x in function_names:
-                    x = gensym('tmp')
+                    tmp_x = gensym('tmp')
+                    bindings[tmp_x] = Var(x)
+                    return Var(tmp_x)
+
                 return Var(x)
+
             case Constant(i):
                 return Constant(i)
+
             case Prim(op, args):
+
                 new_args = [rco_exp(e, bindings) for e in args]
                 new_e = Prim(op, new_args)
                 new_v = gensym('tmp')
                 bindings[new_v] = new_e
+
                 return Var(new_v)
             case _:
                 raise Exception('rco_exp', e)
@@ -314,7 +339,72 @@ def expose_alloc(prog: Program) -> Program:
         case FunctionDef:
             pass
     """
-    pass
+
+    def mk_tag(types: Tuple[type]) -> int:
+        """
+        Builds a vector tag. See section 5.2.2 in the textbook.
+        :param types: A list of the types of the vector's elements.
+        :return: A vector tag, as an integer.
+        """
+        pointer_mask = 0
+        # for each type in the vector, encode it in the pointer mask
+        for t in reversed(types):
+            # shift the mask by 1 bit to make room for this type
+            pointer_mask = pointer_mask << 1
+
+            if isinstance(t, tuple):
+                # if it's a vector type, the mask is 1
+                pointer_mask = pointer_mask + 1
+            else:
+                # otherwise, the mask is 0 (do nothing)
+                pass
+
+        # shift the pointer mask by 6 bits to make room for the length field
+        mask_and_len = pointer_mask << 6
+        mask_and_len = mask_and_len + len(types) # add the length
+
+        # shift the mask and length by 1 bit to make room for the forwarding bit
+        tag = mask_and_len << 1
+        tag = tag + 1
+
+        return tag
+
+    def ea_stmt(stmt: Stmt) -> List[Stmt]:
+        match stmt:
+            case If(cond, then_stmts, else_stmts):
+                return [If(cond, ea_stmts(then_stmts), ea_stmts(else_stmts))]
+            case While(Begin(s1, cond), s2):
+                return [While(Begin(ea_stmts(s1), cond), ea_stmts(s2))]
+            case Assign(x, Prim('tuple', args)):
+                new_stmts = []
+                num_bytes = 8 * (len(args) + 1)
+                new_fp = gensym('tmp')
+                lt_var = gensym('tmp')
+                tag = mk_tag(tuple_var_types[x])
+                new_stmts += [
+                    Assign(new_fp, Prim('add', [Var('free_ptr'), Constant(num_bytes)])),
+                    Assign(lt_var, Prim('lt', [Var(new_fp), Var('fromspace_end')])),
+                    If(Var(lt_var),
+                       [],
+                       [Assign('_', Prim('collect', [Constant(num_bytes)]))]),
+                    Assign(x, Prim('allocate', [Constant(num_bytes), Constant(tag)]))]
+
+                # fill in the values of the tuple
+                for i, a in enumerate(args):
+                    new_stmts.append(Assign('_', Prim('tuple_set', [Var(x), Constant(i), a])))
+                return new_stmts
+            case FunctionDef(name, params, body_stmts, return_type):
+                return [FunctionDef(name, params, ea_stmts(body_stmts), return_type)]
+            case _:
+                return [stmt]
+
+    def ea_stmts(stmts: List[Stmt]) -> List[Stmt]:
+        new_stmts = []
+        for s in stmts:
+            new_stmts.extend(ea_stmt(s))
+        return new_stmts
+
+    return Program(ea_stmts(prog.stmts))
 
 
 ##################################################
@@ -332,11 +422,11 @@ def expose_alloc(prog: Program) -> Program:
 
 def explicate_control(prog: Program) -> cfun.CProgram:
     """
-    Transforms an Ltup Expression into a Ctup program.
-    :param prog: An Ltup Expression
-    :return: A Ctup Program
+    Transforms an Lfun Expression into a Cfun program.
+    :param prog: An Lfun Expression
+    :return: A Cfun Program
     """
-    pass
+
     # Note:
     # Cfun::= CProgram(List[CFunctionDef])
     # Output if very different
@@ -347,91 +437,107 @@ def explicate_control(prog: Program) -> cfun.CProgram:
     current_function = 'main'
 
     # FOLLOWING IS COPIED FROM PREVIOUS COMPILER: MIGHT NEED CHANGES
-    basic_blocks: Dict[str, List[ctup.Stmt]] = {}
+    basic_blocks: Dict[str, List[cfun.Stmt]] = {}
 
     # create a new basic block to hold some statements
     # generates a brand-new name for the block and returns it
-    def create_block(stmts: List[ctup.Stmt]) -> str:
+
+    def create_block(stmts: List[cfun.Stmt]) -> str:
         label = gensym('label')
         basic_blocks[current_function + label] = stmts
         return current_function + label
 
-    def explicate_atm(e: Expr) -> ctup.Atm:
+    def explicate_atm(e: Expr) -> cfun.Atm:
         match e:
             case Var(x):
-                return ctup.Var(x)
+                return cfun.Var(x)
             case Constant(c):
-                return ctup.Constant(c)
+                return cfun.Constant(c)
             case _:
                 raise RuntimeError(e)
 
-    def explicate_exp(e: Expr) -> ctup.Expr:
+    def explicate_exp(e: Expr) -> cfun.Expr:
         match e:
             case Call(func, args):
-                # TODO: treat like prim
-                #cfun.
-                pass
+                new_func = explicate_atm(func)
+                new_args = [explicate_atm(a) for a in args]
+                return cfun.Call(new_func, new_args)
 
             case Prim(op, args):
                 new_args = [explicate_atm(a) for a in args]
-                return ctup.Prim(op, new_args)
+                return cfun.Prim(op, new_args)
             case _:
                 return explicate_atm(e)
 
     def ec_function(name: str, params: List[Tuple[str, type]],
                     body_stmts: List[Stmt], return_type: type):
-        #TODO: Everything from problem 17
+
         nonlocal basic_blocks  # defined in local context but not Global
         nonlocal current_function
         old_basic_blocks = basic_blocks
         old_current_function = current_function
         basic_blocks = {}
         current_function = name
-        # Just follow instructions from 17 from here
-        pass
 
-    def explicate_stmt(stmt: Stmt, cont: List[ctup.Stmt]) -> List[ctup.Stmt]:
+        body_stmts_end = body_stmts[-1]
+
+        # Check with Prof on this guy
+        match body_stmts_end:
+            case Return(e):
+                new_cont = explicate_stmts(body_stmts, [])
+            case _:
+                new_cont = explicate_stmts(body_stmts, [cfun.Return(cfun.Constant(0))])
+        basic_blocks[name + 'start'] = new_cont
+
+        args = [p[0] for p in params]
+        funcDef = cfun.CFunctionDef(name, args, basic_blocks)
+        functions.append(funcDef)
+
+        basic_blocks = old_basic_blocks
+        current_function = old_current_function
+
+    def explicate_stmt(stmt: Stmt, cont: List[cfun.Stmt]) -> List[cfun.Stmt]:
         match stmt:
             case Return(e):
-                #TODO: FIll in
-                pass
-            case FunctionDef(name, params, body_stms, return_type):
-                ec_function(name, params, body_stms, return_type)
+                new_exp = explicate_atm(e)
+                new_stmt: List[cfun.Stmt] = [cfun.Return(new_exp)]
+                return new_stmt + cont
+            case FunctionDef(name, params, body_stmts, return_type):
+                ec_function(name, params, body_stmts, return_type)
                 return cont
             case Assign(x, exp):
                 new_exp = explicate_exp(exp)
-                new_stmt: List[ctup.Stmt] = [ctup.Assign(x, new_exp)]
+                new_stmt: List[cfun.Stmt] = [cfun.Assign(x, new_exp)]
                 return new_stmt + cont
             case Print(exp):
                 new_exp = explicate_atm(exp)
-                new_stmt: List[ctup.Stmt] = [ctup.Print(new_exp)]
+                new_stmt: List[cfun.Stmt] = [cfun.Print(new_exp)]
                 return new_stmt + cont
             case While(Begin(condition_stmts, condition_exp), body_stmts):
                 cont_label = create_block(cont)
-                test_label = gensym('loop_label')  # TODO: Prepend the function name
-                body_label = create_block(explicate_stmts(body_stmts, [ctup.Goto(test_label)]))
-                test_stmts = [ctup.If(explicate_exp(condition_exp),
-                                      ctup.Goto(body_label),
-                                      ctup.Goto(cont_label))]
+                test_label = gensym(current_function + 'loop_label')
+                body_label = create_block(explicate_stmts(body_stmts, [cfun.Goto(test_label)]))
+                test_stmts = [cfun.If(explicate_exp(condition_exp),
+                                      cfun.Goto(body_label),
+                                      cfun.Goto(cont_label))]
                 basic_blocks[test_label] = explicate_stmts(condition_stmts, test_stmts)
-                return [ctup.Goto(test_label)]
+                return [cfun.Goto(test_label)]
             case If(condition, then_stmts, else_stmts):
                 cont_label = create_block(cont)
-                e2_label = create_block(explicate_stmts(then_stmts, [ctup.Goto(cont_label)]))
-                e3_label = create_block(explicate_stmts(else_stmts, [ctup.Goto(cont_label)]))
-                return [ctup.If(explicate_exp(condition),
-                                ctup.Goto(e2_label),
-                                ctup.Goto(e3_label))]
-
+                e2_label = create_block(explicate_stmts(then_stmts, [cfun.Goto(cont_label)]))
+                e3_label = create_block(explicate_stmts(else_stmts, [cfun.Goto(cont_label)]))
+                return [cfun.If(explicate_exp(condition),
+                                cfun.Goto(e2_label),
+                                cfun.Goto(e3_label))]
             case _:
                 raise RuntimeError(stmt)
 
-    def explicate_stmts(stmts: List[Stmt], cont: List[ctup.Stmt]) -> List[ctup.Stmt]:
+    def explicate_stmts(stmts: List[Stmt], cont: List[cfun.Stmt]) -> List[cfun.Stmt]:
         for s in reversed(stmts):
             cont = explicate_stmt(s, cont)
         return cont
 
-    new_body = [ctup.Return(ctup.Constant(0))]
+    new_body = [cfun.Return(cfun.Constant(0))]
     new_body = explicate_stmts(prog.stmts, new_body)
 
 
@@ -471,15 +577,14 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
     :param prog: a Ltup program
     :return: a pseudo-x86 program
     """
-    pass
     current_function = 'main'  # This is going to change regardless so changeable
 
     #TODO: FROM INSTRUCTOR SOLUTION OF 6:
-    def si_atm(a: ctup.Expr) -> x86.Arg:
+    def si_atm(a: cfun.Expr) -> x86.Arg:
         match a:
-            case ctup.Constant(i):
+            case cfun.Constant(i):
                 return x86.Immediate(int(i))
-            case ctup.Var(x):
+            case cfun.Var(x):
                 if x in global_values:
                     return x86.GlobalVal(x)
                 else:
@@ -487,7 +592,7 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
             case _:
                 raise Exception('si_atm', a)
 
-    def si_stmts(stmts: List[ctup.Stmt]) -> List[x86.Instr]:
+    def si_stmts(stmts: List[cfun.Stmt]) -> List[x86.Instr]:
         instrs = []
 
         for stmt in stmts:
@@ -499,7 +604,7 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
 
     binop_instrs = {'add': 'addq', 'sub': 'subq', 'mult': 'imulq', 'and': 'andq', 'or': 'orq'}
 
-    def si_stmt(stmt: ctup.Stmt) -> List[x86.Instr]:
+    def si_stmt(stmt: cfun.Stmt) -> List[x86.Instr]:
         match stmt:
             #TODO: New cases here
             case cfun.Assign(x, cfun.Var(f)):
@@ -507,25 +612,25 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
                 pass
             case cfun.Call(fun, args):
                 pass
-            case ctup.Assign(x, ctup.Prim('allocate', [ctup.Constant(num_bytes), ctup.Constant(tag)])):
+            case cfun.Assign(x, cfun.Prim('allocate', [cfun.Constant(num_bytes), cfun.Constant(tag)])):
                 return [x86.NamedInstr('movq', [x86.GlobalVal('free_ptr'), x86.Var(x)]),
                         x86.NamedInstr('addq', [x86.Immediate(num_bytes), x86.GlobalVal('free_ptr')]),
                         x86.NamedInstr('movq', [x86.Var(x), x86.Reg('r11')]),
                         x86.NamedInstr('movq', [x86.Immediate(tag), x86.Deref('r11', 0)])]
-            case ctup.Assign(_, ctup.Prim('tuple_set', [ctup.Var(x), ctup.Constant(offset), atm1])):
+            case cfun.Assign(_, cfun.Prim('tuple_set', [cfun.Var(x), cfun.Constant(offset), atm1])):
                 offset_bytes = 8 * (offset + 1)
                 return [x86.NamedInstr('movq', [x86.Var(x), x86.Reg('r11')]),
                         x86.NamedInstr('movq', [si_atm(atm1), x86.Deref('r11', offset_bytes)])]
-            case ctup.Assign(x, ctup.Prim('subscript', [atm1, ctup.Constant(offset)])):
+            case cfun.Assign(x, cfun.Prim('subscript', [atm1, cfun.Constant(offset)])):
                 offset_bytes = 8 * (offset + 1)
                 return [x86.NamedInstr('movq', [si_atm(atm1), x86.Reg('r11')]),
                         x86.NamedInstr('movq', [x86.Deref('r11', offset_bytes), x86.Var(x)])]
-            case ctup.Assign(_, ctup.Prim('collect', [ctup.Constant(num_bytes)])):
+            case cfun.Assign(_, cfun.Prim('collect', [cfun.Constant(num_bytes)])):
                 return [x86.NamedInstr('movq', [x86.Reg('r15'), x86.Reg('rdi')]),
                         x86.NamedInstr('movq', [x86.Immediate(num_bytes), x86.Reg('rsi')]),
                         x86.Callq('collect')]
 
-            case ctup.Assign(x, ctup.Prim(op, [atm1, atm2])):
+            case cfun.Assign(x, cfun.Prim(op, [atm1, atm2])):
                 if op in binop_instrs:
                     return [x86.NamedInstr('movq', [si_atm(atm1), x86.Reg('rax')]),
                             x86.NamedInstr(binop_instrs[op], [si_atm(atm2), x86.Reg('rax')]),
@@ -537,30 +642,36 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
 
                 else:
                     raise Exception('si_stmt failed op', op)
-            case ctup.Assign(x, ctup.Prim('not', [atm1])):
+            case cfun.Assign(x, cfun.Prim('not', [atm1])):
                 return [x86.NamedInstr('movq', [si_atm(atm1), x86.Var(x)]),
                         x86.NamedInstr('xorq', [x86.Immediate(1), x86.Var(x)])]
-            case ctup.Assign(x, atm1):
+            case cfun.Assign(x, atm1):
                 return [x86.NamedInstr('movq', [si_atm(atm1), x86.Var(x)])]
-            case ctup.Print(atm1):
+            case cfun.Print(atm1):
                 return [x86.NamedInstr('movq', [si_atm(atm1), x86.Reg('rdi')]),
                         x86.Callq('print_int')]
-            case ctup.Return(atm1):
+            case cfun.Return(atm1):
                 return [x86.NamedInstr('movq', [si_atm(atm1), x86.Reg('rax')]),
                         x86.Jmp('conclusion')]
-            case ctup.Goto(label):
+            case cfun.Goto(label):
                 return [x86.Jmp(label)]
-            case ctup.If(a, ctup.Goto(then_label), ctup.Goto(else_label)):
+            case cfun.If(a, cfun.Goto(then_label), cfun.Goto(else_label)):
                 return [x86.NamedInstr('cmpq', [si_atm(a), x86.Immediate(1)]),
                         x86.JmpIf('e', then_label),
                         x86.Jmp(else_label)]
             case _:
                 raise Exception('si_stmt', stmt)
 
-    # si_def(d: cfun.CFunctionDef) -> X86FunctionDef:
-    #     # TODO: Fill in using exercise function 2
-    #     # Blocks = ???
-    #     return X86FunctionDef(d.name, blocks, (None, None))
+    def si_def(d: cfun.CFunctionDef) -> X86FunctionDef:
+        # TODO: Fill in using exercise function 2
+        nonlocal current_function
+        current_function = d.name
+        for label in d.blocks:
+            si_stmts(d.blocks[label])
+            if label == d.name + 'start':
+
+            si_stmts(d.blocks[label])
+        return X86FunctionDef(d.name, blocks, (None, None))
 
     # basic_blocks = {label: si_stmts(block) for (label, block) in prog.blocks.items()}
     functions = []
