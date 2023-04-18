@@ -663,14 +663,23 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
                 raise Exception('si_stmt', stmt)
 
     def si_def(d: cfun.CFunctionDef) -> X86FunctionDef:
-        # TODO: Fill in using exercise function 2
         nonlocal current_function
         current_function = d.name
-        for label in d.blocks:
-            si_stmts(d.blocks[label])
-            if label == d.name + 'start':
 
-            si_stmts(d.blocks[label])
+        blocks = {}
+
+        for label in d.blocks:
+            instrs = si_stmts(d.blocks[label])
+            if label == d.name + 'start':
+                # Here we add statements to set up arguments
+                # one movq for each parameter
+                arg_reg = 0
+                for param_name in d.args:
+                    instrs.append(x86.NamedInstr('movq',
+                                                 [constants.argument_registers[arg_reg],
+                                                  x86.Var(param_name)]))
+                    arg_reg += 1
+            blocks[label] = instrs
         return X86FunctionDef(d.name, blocks, (None, None))
 
     # basic_blocks = {label: si_stmts(block) for (label, block) in prog.blocks.items()}
