@@ -100,10 +100,19 @@ def typecheck(program: Program) -> Program:
     def tc_exp(e: Expr, env: TEnv) -> type:
         match e:
             case Call(func, args):
-                # Treat this like Prim
-                # assert tc_exp(func, env) == Callable
+                # args is List[Expr]
+                """
+                1. Assume we have already type-checked the definition of f
+                2. typecheck f; it should have the type Callable([t1, ... , tk], t) --- (assertion)
+                3. Typecheck a1, ... , ak and ensure they have the same types as the 
+                   arguments in the function def (t1, .. tk) --- (lots of assertions)
+                4. Return the type t
+                """
+                tc_exp(func, env)
                 func_callable = env[func]
-                pass
+                for arg_no in range(len(args)):
+                    assert tc_exp(args[arg_no], env) == func_callable.args[arg_no]
+                return env[func].output_type
             case Var(x):
                 if x in global_values:
                     return int
@@ -139,7 +148,6 @@ def typecheck(program: Program) -> Program:
 
     def tc_stmt(s: Stmt, env: TEnv):
         match s:
-
             # FunctionDef(str, List[Tuple[str, type]], List[Stmt], type)
             case FunctionDef(name, params, body_stmts, return_type):
                 # Callable(List[type], type)
@@ -147,7 +155,7 @@ def typecheck(program: Program) -> Program:
                 env[name] = Callable(param_types, return_type)
                 new_env = env.copy()
                 for param in params:
-                    tc_exp(param, new_env)
+                    new_env[param[0]] = param[1]
                 new_env['ret_val'] = return_type
                 tc_stmts(body_stmts, new_env)
                 function_names.add(name)
@@ -211,8 +219,7 @@ def rco(prog: Program) -> Program:
     def rco_stmt(stmt: Stmt, bindings: Dict[str, Expr]) -> Stmt:
         match stmt:
             case FunctionDef(name, params, body_stmts, return_type):
-                #TODO: Incomplete
-                rco_stmts(body_stmts)
+                return FunctionDef(name, params, rco_stmts(body_stmts), return_type)
             case Return(e):
                 return Return(rco_exp(e, bindings))
             case Assign(x, e1):
@@ -258,9 +265,15 @@ def rco(prog: Program) -> Program:
     def rco_exp(e: Expr, bindings: Dict[str, Expr]) -> Expr:
         match e:
             case Call(func, params):
-                pass
+                new_params = [rco_exp(p, bindings) for p in params]
+                new_expr = Call(rco_exp(func, bindings), new_params)
+                new_v = gensym('tmp')
+                bindings[new_v] = new_expr
+                return Var(new_v)
             case Var(x):
-                #TODO: Update this
+                # If x is a function make a tmp for it and return that
+                if x in function_names:
+                    x = gensym('tmp')
                 return Var(x)
             case Constant(i):
                 return Constant(i)
@@ -323,6 +336,7 @@ def explicate_control(prog: Program) -> cfun.CProgram:
     :param prog: An Ltup Expression
     :return: A Ctup Program
     """
+    pass
     # Note:
     # Cfun::= CProgram(List[CFunctionDef])
     # Output if very different
@@ -457,7 +471,7 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
     :param prog: a Ltup program
     :return: a pseudo-x86 program
     """
-
+    pass
     current_function = 'main'  # This is going to change regardless so changeable
 
     #TODO: FROM INSTRUCTOR SOLUTION OF 6:
@@ -543,10 +557,10 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
             case _:
                 raise Exception('si_stmt', stmt)
 
-    si_def(d: cfun.CFunctionDef) -> X86FunctionDef:
-        # TODO: Fill in using exercise function 2
-        # Blocks = ???
-        return X86FunctionDef(d.name, blocks, (None, None))
+    # si_def(d: cfun.CFunctionDef) -> X86FunctionDef:
+    #     # TODO: Fill in using exercise function 2
+    #     # Blocks = ???
+    #     return X86FunctionDef(d.name, blocks, (None, None))
 
     # basic_blocks = {label: si_stmts(block) for (label, block) in prog.blocks.items()}
     functions = []
