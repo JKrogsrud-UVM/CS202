@@ -782,12 +782,14 @@ def _allocate_registers(name: str, program: x86.X86Program) -> x86.X86Program:
                 return vars_arg(e1)
             case x86.NamedInstr(i, [e1, e2]) if i in ['addq', 'subq', 'imulq', 'cmpq', 'andq', 'orq', 'xorq']:
                 return vars_arg(e1).union(vars_arg(e2))
+            case x86.NamedInstr(i, [e1, e2]) if i == 'leaq':
+                return set()
             case x86.Jmp(label) | x86.JmpIf(_, label):
                 # the variables that might be read after this instruction
                 # are the live-before variables of the destination block
                 return live_before_sets[label]
             case _:
-                if isinstance(i, (x86.Callq, x86.Set)):
+                if isinstance(i, (x86.Callq, x86.Set, x86.IndirectCallq)):
                     return set()
                 else:
                     raise Exception(i)
@@ -795,10 +797,10 @@ def _allocate_registers(name: str, program: x86.X86Program) -> x86.X86Program:
     def writes_of(i: x86.Instr) -> Set[x86.Var]:
         match i:
             case x86.NamedInstr(i, [e1, e2]) \
-                if i in ['movq', 'movzbq', 'addq', 'subq', 'imulq', 'cmpq', 'andq', 'orq', 'xorq']:
+                if i in ['movq', 'movzbq', 'addq', 'subq', 'imulq', 'cmpq', 'andq', 'orq', 'xorq', 'leaq']:
                 return vars_arg(e2)
             case _:
-                if isinstance(i, (x86.Jmp, x86.JmpIf, x86.Callq, x86.Set)):
+                if isinstance(i, (x86.Jmp, x86.JmpIf, x86.Callq, x86.Set, x86.IndirectCallq)):
                     return set()
                 else:
                     raise Exception(i)
@@ -843,7 +845,7 @@ def _allocate_registers(name: str, program: x86.X86Program) -> x86.X86Program:
                 for var in live_after:
                     for r in constants.caller_saved_registers:
                         graph.add_edge(x86.Reg(r), var)
-                    if var.var in tuple_var_types:
+                    if var in tuple_var_types:
                         for r in constants.callee_saved_registers:
                             graph.add_edge(x86.Reg(r), var)
             case _:
@@ -922,7 +924,7 @@ def _allocate_registers(name: str, program: x86.X86Program) -> x86.X86Program:
             case x86.Set(cc, a1):
                 return x86.Set(cc, ah_arg(a1))
             case _:
-                if isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.JmpIf)):
+                if isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.JmpIf, x86.IndirectCallq)):
                     return e
                 else:
                     raise Exception('ah_instr', e)
@@ -996,10 +998,18 @@ def patch_instructions(program: X86ProgramDefs) -> X86ProgramDefs:
     :return: A patched x86 program.
     """
     # same structure as ra
-    pass
+    new_defs = []
+    for d in program.defs:
+        mini_prog = x86.X86Program(d.blocks, d.stack_space)
+        result_mini_prog = _patch_instructions(d.label, mini_prog)
+        # Type error is unavoidable here
+        new_def = X86FunctionDef(d.label, result_mini_prog.blocks, result_mini_prog.stack_space)
+        new_defs.append(new_def)
+    new_prog = X86ProgramDefs(new_defs)
+    return new_prog
 
 
-def _patch_instructions(program: x86.X86Program) -> x86.X86Program:
+def _patch_instructions(name: str, program: x86.X86Program) -> x86.X86Program:
     def pi_instr(e: x86.Instr) -> List[x86.Instr]:
         match e:
             case x86.NamedInstr(i, [x86.Deref(r1, o1), x86.GlobalVal(x)]):
@@ -1018,7 +1028,7 @@ def _patch_instructions(program: x86.X86Program) -> x86.X86Program:
                 return [x86.NamedInstr('movq', [x86.Immediate(i), x86.Reg('rax')]),
                         x86.NamedInstr('cmpq', [a1, x86.Reg('rax')])]
             case _:
-                if isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.JmpIf, x86.NamedInstr, x86.Set)):
+                if isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.JmpIf, x86.NamedInstr, x86.Set, x86.IndirectCallq)):
                     return [e]
                 else:
                     raise Exception('pi_instr', e)
@@ -1058,7 +1068,7 @@ def prelude_and_conclusion(program: X86ProgramDefs) -> x86.X86Program:
     # This does the flattening out process
     new_blocks = {}
     for d in program.defs:
-        mini_prog = x86.X86Program(d.blocks)
+        mini_prog = x86.X86Program(d.blocks, d.stack_space)
         result_mini_prog = _prelude_and_conclusion(d.label, mini_prog)
         new_blocks.update(result_mini_prog.blocks)
     new_prog = x86.X86Program(new_blocks)
@@ -1069,30 +1079,36 @@ def _prelude_and_conclusion(name: str, program: x86.X86Program) -> x86.X86Progra
     stack_bytes, root_stack_locations = program.stack_space
 
     prelude = [x86.NamedInstr('pushq', [x86.Reg('rbp')]),
-               x86.NamedInstr('movq', [x86.Reg('rsp'), x86.Reg('rbp')]),
-               x86.NamedInstr('subq', [x86.Immediate(stack_bytes),
-                                       x86.Reg('rsp')]),
-               x86.NamedInstr('movq', [x86.Immediate(constants.root_stack_size),
-                                       x86.Reg('rdi')]),
-               x86.NamedInstr('movq', [x86.Immediate(constants.heap_size),
-                                       x86.Reg('rsi')]),
-               x86.Callq('initialize'),
-               x86.NamedInstr('movq', [x86.GlobalVal('rootstack_begin'), x86.Reg('r15')])]
+               x86.NamedInstr('movq', [x86.Reg('rsp'), x86.Reg('rbp')])]
+
+    for reg in constants.callee_saved_registers:
+        prelude += [x86.NamedInstr('pushq', [x86.Reg(reg)])]
+
+    prelude += [x86.NamedInstr('subq', [x86.Immediate(stack_bytes), x86.Reg('rsp')])]
+
+    if name == 'main':
+        prelude += [x86.NamedInstr('movq', [x86.Immediate(constants.root_stack_size), x86.Reg('rdi')]),
+                    x86.NamedInstr('movq', [x86.Immediate(constants.heap_size),x86.Reg('rsi')]),
+                    x86.Callq('initialize'), x86.NamedInstr('movq', [x86.GlobalVal('rootstack_begin'), x86.Reg('r15')])]
+
     for offset in range(root_stack_locations):
         prelude += [x86.NamedInstr('movq', [x86.Immediate(0), x86.Deref('r15', 0)]),
                     x86.NamedInstr('addq', [x86.Immediate(8), x86.Reg('r15')])]
-    prelude += [x86.Jmp('start')]
 
+    prelude += [x86.Jmp(name + 'start')]
 
-    # x86.NamedInst(subq, [x86.Immediate(8*root_stack_loations), x86.Reg(r15)]) <- this gets added down here
-    conclusion = [x86.NamedInstr('addq', [x86.Immediate(stack_bytes),
-                                          x86.Reg('rsp')]),
-                  x86.NamedInstr('popq', [x86.Reg('rbp')]),
-                  x86.Retq()]
+    conclusion = [x86.NamedInstr('addq', [x86.Immediate(stack_bytes), x86.Reg('rsp')]),
+                  x86.NamedInstr('subq', [x86.Immediate(8* root_stack_locations), x86.Reg('r15')])]
+
+    for reg in reversed(constants.callee_saved_registers):
+        conclusion.append(x86.NamedInstr('popq', [x86.Reg(reg)]))
+
+    conclusion += [x86.NamedInstr('popq', [x86.Reg('rbp')]),
+                   x86.Retq()]
 
     new_blocks = program.blocks.copy()
-    new_blocks['main'] = prelude #TODO: change here
-    new_blocks['conclusion'] = conclusion # TODO: change here
+    new_blocks[name] = prelude
+    new_blocks[name + 'conclusion'] = conclusion
     return x86.X86Program(new_blocks, stack_space=program.stack_space)
 
 
