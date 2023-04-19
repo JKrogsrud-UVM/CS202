@@ -478,15 +478,7 @@ def explicate_control(prog: Program) -> cfun.CProgram:
         basic_blocks = {}
         current_function = name
 
-        body_stmts_end = body_stmts[-1]
-
-        #TODO: Check with Prof on this, specifically Returning 0
-        # TODO: this is in fact unecessary as we throw it away in code to follow SO CHANGE NEEDED HERE
-        match body_stmts_end:
-            case Return(e):
-                new_cont = explicate_stmts(body_stmts, [])
-            case _:
-                new_cont = explicate_stmts(body_stmts, [cfun.Return(cfun.Constant(0))])
+        new_cont = explicate_stmts(body_stmts,[cfun.Return(cfun.Constant(0))])
         basic_blocks[name + 'start'] = new_cont
 
         args = [p[0] for p in params]
@@ -498,11 +490,10 @@ def explicate_control(prog: Program) -> cfun.CProgram:
 
     def explicate_stmt(stmt: Stmt, cont: List[cfun.Stmt]) -> List[cfun.Stmt]:
         match stmt:
-            #TODO: Can throw away the continuation here as there is none after a control statement
             case Return(e):
                 new_exp = explicate_atm(e)
                 new_stmt: List[cfun.Stmt] = [cfun.Return(new_exp)]
-                return new_stmt + cont
+                return new_stmt
             case FunctionDef(name, params, body_stmts, return_type):
                 ec_function(name, params, body_stmts, return_type)
                 return cont
@@ -557,6 +548,7 @@ def explicate_control(prog: Program) -> cfun.CProgram:
 #                | "subscript" | "allocate" | "collect" | "tuple_set"
 # Atm          ::= Var(x) | Constant(n)
 # Expr         ::= Atm | Prim(op, List[Expr])
+#          | Call(Expr, List[Expr])
 # Stmt         ::= Assign(x, Expr) | Print(Expr)
 #                | If(Expr, Goto(label), Goto(label)) | Goto(label) | Return(Expr)
 # Stmts        ::= List[Stmt]
@@ -581,7 +573,6 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
     """
     current_function = 'main'  # This is going to change regardless so changeable
 
-    #TODO: FROM INSTRUCTOR SOLUTION OF 6:
     def si_atm(a: cfun.Expr) -> x86.Arg:
         match a:
             case cfun.Constant(i):
@@ -609,13 +600,23 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
     def si_stmt(stmt: cfun.Stmt) -> List[x86.Instr]:
         match stmt:
             case cfun.Assign(x, cfun.Var(f)):
-                #TODO
                 if f in function_names:
-                    # use x86.NamedInstruction(leaq, [x86.GlobalVal(f), x86.Var(x)])
-                pass
-            case cfun.Call(fun, args):
-                #TODO
-                pass
+                    return [x86.NamedInstr('leaq', [x86.GlobalVal(f), x86.Var(x)])]
+                else:
+                    return [x86.NamedInstr('movq', [si_atm(cfun.Var(f)), x86.Var(x)])]
+            case cfun.Assign(x, cfun.Call(fun, args)):
+                # move args into paramter registers (reverse order)
+                num_args = len(args)
+                instrs = []
+
+                for i in range(num_args):
+                    instrs.append(x86.NamedInstr('movq', [si_atm(args[i]), x86.Reg(constants.argument_registers[i])]))
+
+                instrs.append(x86.IndirectCallq(si_atm(fun), 0))
+                instrs.append(x86.NamedInstr('movq', [x86.Reg('rax'), x86.Var(x)]))
+
+                return instrs
+
             case cfun.Assign(x, cfun.Prim('allocate', [cfun.Constant(num_bytes), cfun.Constant(tag)])):
                 return [x86.NamedInstr('movq', [x86.GlobalVal('free_ptr'), x86.Var(x)]),
                         x86.NamedInstr('addq', [x86.Immediate(num_bytes), x86.GlobalVal('free_ptr')]),
@@ -672,16 +673,19 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
 
         for label in d.blocks:
             instrs = si_stmts(d.blocks[label])
+
+            prepend_instr = []
             if label == d.name + 'start':
                 # Here we add statements to set up arguments
                 # one movq for each parameter
                 arg_reg = 0
                 for param_name in d.args:
-                    instrs.append(x86.NamedInstr('movq',
-                                                 [constants.argument_registers[arg_reg],
+                    prepend_instr.append(x86.NamedInstr('movq',
+                                                 [x86.Reg(constants.argument_registers[arg_reg]),
                                                   x86.Var(param_name)]))
                     arg_reg += 1
-            blocks[label] = instrs
+            new_instr = prepend_instr + instrs
+            blocks[label] = new_instr
         return X86FunctionDef(d.name, blocks, (None, None))
 
     # basic_blocks = {label: si_stmts(block) for (label, block) in prog.blocks.items()}
