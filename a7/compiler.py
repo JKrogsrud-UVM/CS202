@@ -774,7 +774,6 @@ def _allocate_registers(name: str, program: x86.X86Program) -> x86.X86Program:
                 return {x86.Var(x)}
             case x86.Deref(r, offset):
                 return set()
-            ###TODO What to return for this?
             case x86.GlobalVal(x):
                 return {x86.GlobalVal(x)}
             case _:
