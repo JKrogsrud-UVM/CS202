@@ -169,6 +169,10 @@ def typecheck(program: Program) -> Program:
                 new_env['ret_val'] = return_type
                 tc_stmts(body_stmts, new_env)
 
+                for x in new_env:
+                    if isinstance(new_env[x], tuple):
+                        tuple_var_types[x] = new_env[x]
+
                 function_names.add(name)
 
             # Can be assumed will happen after function def?
@@ -436,8 +440,6 @@ def explicate_control(prog: Program) -> cfun.CProgram:
     functions: List[cfun.CFunctionDef] = []
     current_function = 'main'
 
-    # FOLLOWING IS COPIED FROM PREVIOUS COMPILER: MIGHT NEED CHANGES
-
     # create a new basic block to hold some statements
     # generates a brand-new name for the block and returns it
 
@@ -478,7 +480,7 @@ def explicate_control(prog: Program) -> cfun.CProgram:
         basic_blocks = {}
         current_function = name
 
-        new_cont = explicate_stmts(body_stmts,[cfun.Return(cfun.Constant(0))])
+        new_cont = explicate_stmts(body_stmts, [cfun.Return(cfun.Constant(0))])
         basic_blocks[name + 'start'] = new_cont
 
         args = [p[0] for p in params]
@@ -747,6 +749,7 @@ def _allocate_registers(name: str, program: x86.X86Program) -> x86.X86Program:
     blocks = program.blocks
     all_vars: Set[x86.Var] = set()
     live_before_sets = {name + 'conclusion': set()}
+
     for label in blocks:
         live_before_sets[label] = set()
 
@@ -771,8 +774,9 @@ def _allocate_registers(name: str, program: x86.X86Program) -> x86.X86Program:
                 return {x86.Var(x)}
             case x86.Deref(r, offset):
                 return set()
+            ###TODO What to return for this?
             case x86.GlobalVal(x):
-                return set()
+                return {x86.GlobalVal(x)}
             case _:
                 raise Exception('ul_arg', a)
 
@@ -783,13 +787,15 @@ def _allocate_registers(name: str, program: x86.X86Program) -> x86.X86Program:
             case x86.NamedInstr(i, [e1, e2]) if i in ['addq', 'subq', 'imulq', 'cmpq', 'andq', 'orq', 'xorq']:
                 return vars_arg(e1).union(vars_arg(e2))
             case x86.NamedInstr(i, [e1, e2]) if i == 'leaq':
-                return set()
+                return vars_arg(e1)
             case x86.Jmp(label) | x86.JmpIf(_, label):
                 # the variables that might be read after this instruction
                 # are the live-before variables of the destination block
                 return live_before_sets[label]
+            case x86.IndirectCallq(e1, num_args):
+                return vars_arg(e1)
             case _:
-                if isinstance(i, (x86.Callq, x86.Set, x86.IndirectCallq)):
+                if isinstance(i, (x86.Callq, x86.Set)):
                     return set()
                 else:
                     raise Exception(i)
@@ -923,8 +929,10 @@ def _allocate_registers(name: str, program: x86.X86Program) -> x86.X86Program:
                 return x86.NamedInstr(i, [ah_arg(a) for a in args])
             case x86.Set(cc, a1):
                 return x86.Set(cc, ah_arg(a1))
+            case x86.IndirectCallq(e1, num_args):
+                return x86.IndirectCallq(ah_arg(e1), num_args)
             case _:
-                if isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.JmpIf, x86.IndirectCallq)):
+                if isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.JmpIf)):
                     return e
                 else:
                     raise Exception('ah_instr', e)
@@ -1162,6 +1170,8 @@ def run_compiler(s, logging=False):
         print_prog(current_program)
 
     for pass_name, pass_fn in compiler_passes.items():
+        if pass_name == 'typecheck2':
+            print("checking")
         current_program = pass_fn(current_program)
 
         if logging == True:
